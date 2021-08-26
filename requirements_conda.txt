@@ -1,0 +1,12 @@
+# Install torch and plotly using conda, see `README.md`
+ray[default]==1.12.1
+ray[tune]==1.12.1
+wandb==0.12.14
+numpy==1.22.3
+pandas==1.4.1
+kaleido==0.2.1
+tensorboard==2.8.0
+tqdm==4.63.0
+jupyter==1.0.0
+ipywidgets==7.7.0
+PyYAML==6.0

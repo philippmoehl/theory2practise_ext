@@ -1,0 +1,33 @@
+__call__: theory2practice.experiments.Runner
+ray_init_kwargs:
+    _node_ip_address:
+        __environ__: HEAD_NODE_IP
+        default: 127.0.0.1
+    _redis_password:
+        __environ__: REDIS_PASSWORD
+        default: '5241590000000000'
+    address:
+        __environ__: RAY_ADDRESS
+        default: null
+    runtime_env:
+        env_vars:
+            CUBLAS_WORKSPACE_CONFIG: :4096:8
+            PYTHONHASHSEED:
+                __environ__: PYTHONHASHSEED
+                default: '42'
+            WANDB_API_KEY:
+                __environ__: WANDB_API_KEY
+                default: __placeholder__
+            WANDB_MODE:
+                __environ__: WANDB_MODE
+                default: disabled
+            WANDB_SILENT:
+                __environ__: WANDB_SILENT
+                default: 'false'
+            WANDB_START_METHOD: thread
+tune_run_kwargs:
+    resume: false
+    sync_config:
+        __call__: ray.tune.SyncConfig
+        sync_to_driver: false
+    verbose: 1

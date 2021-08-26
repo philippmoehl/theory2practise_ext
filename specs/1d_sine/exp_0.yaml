@@ -1,0 +1,105 @@
+__call__: theory2practice.experiments.Experiment
+checkpoint_freq: 1
+config:
+    __spec__:
+        __call__: theory2practice.experiments.TrainableConfig
+        algorithm:
+            __call__: theory2practice.algorithms.GdAlgorithm
+            data_loader_kwargs:
+                batch_size:
+                    eval: int(np.ceil(spec.config.n_samples * 0.02))
+                shuffle: true
+            distribution_wrapper: &id001
+                __call__: theory2practice.utils.DistributionWrapper
+                distribution_factory:
+                    __import__: torch.distributions.uniform.Uniform
+                tensor_kwargs:
+                    high: 0.5
+                    low:
+                        __call__: theory2practice.utils.create_tensor
+                        data:
+                        - -0.5
+            epochs_per_iteration: 1000
+            loss:
+                __call__: theory2practice.utils.LpLoss
+                p: 2
+            model:
+                __call__: theory2practice.algorithms.FeedForward
+                activation:
+                    __call__: torch.nn.ReLU
+                depth: 22
+                input_dim: 1
+                width: 50
+            optimizer_factory:
+                __import__: torch.optim.Adam
+            optimizer_kwargs:
+                lr: 0.0001
+            scheduler_factory:
+                __import__: torch.optim.lr_scheduler.ExponentialLR
+            scheduler_kwargs:
+                gamma:
+                    eval: (1e-06 / spec.config.algorithm.optimizer_kwargs.lr) ** (1
+                        / 5000)
+            scheduler_step_unit: epoch
+            standardize: true
+        dim: 1
+        dtype:
+            __import__: torch.double
+        log_path: results/1d_sine
+        n_samples: 1000
+        plot_save_dir: plots
+        plot_x:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.linspace
+            end: 0.5
+            methods:
+            -   args:
+                - -1
+                name: unsqueeze
+            start: -0.5
+            steps: 10000
+        plot_x_axis:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.linspace
+            end: 0.5
+            start: -0.5
+            steps: 10000
+        seed: 10000
+        target_fn:
+            __call__: theory2practice.utils.sinusoidal_target
+            factor: 5
+        test_batch_size: 131072
+        test_batches: 128
+        test_distribution_wrapper: *id001
+        test_losses:
+        -   __call__: theory2practice.utils.LpLoss
+            p: 1
+        -   __call__: theory2practice.utils.LpLoss
+            p: 2
+        -   __call__: theory2practice.utils.LpLoss
+            p: infinity
+        wandb:
+            group: 1d_sine
+            project: t2p_1d_sine
+local_dir: results/1d_sine
+max_failures: 10
+name: exp
+preprocessors:
+-   __call__: theory2practice.experiments.SetupEnviron
+    environ_update:
+        TUNE_GLOBAL_CHECKPOINT_S: '600'
+        TUNE_MAX_PENDING_TRIALS_PG: '1'
+        TUNE_RESULT_BUFFER_LENGTH: '0'
+        TUNE_WARN_THRESHOLD_S: '2'
+-   __call__: theory2practice.experiments.LogSpecs
+    log_path: results/1d_sine
+    spec_dir: specs/1d_sine
+resources_per_trial:
+    cpu: 1
+    gpu: 1
+run:
+    __import__: theory2practice.experiments.Trainable
+stop:
+    training_iteration: 5

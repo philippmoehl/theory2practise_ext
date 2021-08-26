@@ -1,0 +1,49 @@
+__file__: specs/3d_5x32/exp_template.yaml
+config/__spec__/algorithm:
+    __call__: theory2practice.algorithms.GdAlgorithm
+    data_loader_kwargs:
+        batch_size:
+            eval: int(np.ceil(spec.config.n_samples * 0.2))
+        shuffle: true
+    distribution_wrapper:
+        __call__: theory2practice.utils.DistributionWrapper
+        distribution_factory:
+            __import__: torch.distributions.uniform.Uniform
+        tensor_kwargs:
+            high: 0.5
+            low:
+                __call__: theory2practice.utils.create_tensor
+                data:
+                - -0.5
+                methods:
+                -   args:
+                    - 3
+                    name: expand
+    epochs_per_iteration: 1000
+    loss:
+        __call__: theory2practice.utils.LpLoss
+        p: 2
+    model:
+        __call__: theory2practice.algorithms.FeedForward
+        activation:
+            __call__: torch.nn.ReLU
+        depth: 5
+        input_dim: 3
+        width:
+            grid_search:
+            - 2048
+            - 512
+            - 32
+    optimizer_factory:
+        __import__: torch.optim.Adam
+    optimizer_kwargs:
+        lr: 0.0001
+    scheduler_factory:
+        __import__: torch.optim.lr_scheduler.ExponentialLR
+    scheduler_kwargs:
+        gamma:
+            eval: (1e-06 / spec.config.algorithm.optimizer_kwargs.lr) ** (1 / 5000)
+    scheduler_step_unit: epoch
+    standardize: true
+config/__spec__/wandb/group: exp_0
+name: exp_0
