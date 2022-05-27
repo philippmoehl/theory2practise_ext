@@ -1,7 +1,7 @@
 # Accurate Learning with Neural Networks - from Theory to Practice
 
-> Accompanying code for the paper 'Training ReLU Networks to high uniform accuracy is 
-> intractable'. Implemented in [PyTorch](https://pytorch.org/), experiment execution and tracking using [Ray Tune](https://www.ray.io/ray-tune) 
+> Accompanying code for the paper ['Training ReLU Networks to high uniform accuracy is 
+> intractable'](https://arxiv.org/abs/2205.13531). Implemented in [PyTorch](https://pytorch.org/), experiment execution and tracking using [Ray Tune](https://www.ray.io/ray-tune) 
 > and [Weights & Biases](https://wandb.ai/).
 
 ![Illustration of a learned neural network with small average but large uniform error.](illustration.png)
