@@ -1,0 +1,72 @@
+__call__: theory2practice.experiments.Experiment
+checkpoint_freq: 1
+config:
+    __spec__:
+        __call__: theory2practice.experiments.TrainablePdeConfig
+        algorithm: null
+        dim: 1
+        dtype:
+            __import__: torch.float
+        log_path: results/pde_reaction
+        n_f:
+            grid_search:
+            - 100
+        plot_save_dir: plots
+        plot_x_axis:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.arange
+            end: 6.283185307179586
+            start: 0.0
+            step: 0.02454369260617026
+        plot_t_axis:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.linspace
+            end: 1
+            start: 0
+            steps: 100
+        seed:
+            grid_search:
+            - 0
+        pde:
+            __call__: theory2practice.pde_utils.Reaction
+            params:
+                rho: 0.3
+            _u0:
+                __import__: torch.sin
+        test_grid:
+            __call__: theory2practice.utils.TensorGrid
+            nx: 256
+            nt: 100
+        test_losses:
+        -   __call__: theory2practice.utils.LpLoss
+            p: 1
+        -   __call__: theory2practice.utils.LpLoss
+            p: 2
+            relative: True
+        -   __call__: theory2practice.utils.LpLoss
+            p: infinity
+        wandb:
+            group: exp
+            project: t2p_pde_reaction
+local_dir: results/pde_reaction
+max_failures: 10
+name: exp
+preprocessors:
+-   __call__: theory2practice.experiments.SetupEnviron
+    environ_update:
+        TUNE_GLOBAL_CHECKPOINT_S: '600'
+        TUNE_MAX_PENDING_TRIALS_PG: '1'
+        TUNE_RESULT_BUFFER_LENGTH: '0'
+        TUNE_WARN_THRESHOLD_S: '2'
+-   __call__: theory2practice.experiments.LogSpecs
+    log_path: results/pde_reaction
+    spec_dir: specs/pde_reaction
+resources_per_trial:
+    cpu: 1
+    # gpu: 1
+run:
+    __import__: theory2practice.experiments.Trainable
+stop:
+    training_iteration: 1

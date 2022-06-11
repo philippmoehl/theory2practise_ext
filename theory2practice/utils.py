@@ -14,6 +14,8 @@ import numpy as np
 import plotly.graph_objects as go
 import torch
 
+from .pde_utils import *
+
 _NO_DEFAULT = object()
 WANDB_HOST = "api.wandb.ai"
 WANDB_API_KEY = "WANDB_API_KEY"
@@ -323,6 +325,54 @@ class DistributionWrapper(torch.nn.Module):
         )
 
 
+class TensorGrid:
+    """
+    Grid data preprocessor.
+    """
+
+    def __init__(self, nx, nt, x_lb=0.0, x_ub=2 * torch.pi, t_min=0.0, t_max=1.0):
+        self.nx = nx
+        self.nt = nt
+        self.x_lb = x_lb
+        self.x_ub = x_ub
+        self.t_min = t_min
+        self.t_max = t_max
+
+        self.X, self.T = create_tensor_grid(nx, nt, self.x_lb, self.x_ub,
+                                            self.t_min, self.t_max)
+
+    def sample_f_data(self, n_f):
+        """No_initial_no_boundary, requires_grad for enforcing pde."""
+        inner_X = self.X[1:, 1:-1].flatten().view(-1, 1)
+        inner_T = self.T[1:, 1:-1].flatten().view(-1, 1)
+
+        idx = torch.randperm(inner_X.size()[0])[:n_f]
+
+        return inner_X[idx].requires_grad_(), inner_T[idx].requires_grad_()
+
+    def x(self):
+        # initial condition, from x = [-end, +end] and t=0
+        ic = torch.cat([self.X[:1, :-1].t(), self.T[:1, :-1].t()], dim=1)
+        # boundary condition at x = 0, and t = [0, 1]
+        bc_lb = torch.cat([self.X[:, :1], self.T[:, :1]], dim=1)
+        # at x = end
+        bc_ub = torch.cat([self.X[:, -1:], self.T[:, -1:]], dim=1)
+
+        return ic, bc_lb, bc_ub
+
+    def x_star(self):
+        _x_star = torch.cat([
+            self.X[:, :-1].flatten().view(-1, 1),
+            self.T[:, :-1].flatten().view(-1, 1)
+        ], dim=1)
+        return _x_star
+
+    def to(self, dtype, device):
+        """Sets the device and dtype."""
+        self.X.to(device=device, dtype=dtype)
+        self.T.to(device=device, dtype=dtype)
+
+
 class Loss(ABC):
     """
     Base class for different losses.
@@ -441,6 +491,99 @@ class LpLoss(Loss):
         return f"{prefix}L{self.p}"
 
 
+class PinnLoss(Loss):
+    """
+    Pinn losses.
+    """
+
+    def __init__(self, L=1.0, loss_style="mean", eps=1.0, relative=False):
+
+        if not (loss_style in ["mean", "sum"]):
+            raise ValueError("loss_style can either be a `mean` or `sum`.")
+
+        self.loss_style = loss_style
+        self.L = L
+        self.eps = eps
+        self.relative = relative
+
+        self.best = None
+        self.last_improve = None
+        self._running = []
+        self._batch_sizes = []
+
+    def _error(self, prediction, y):
+        assert prediction.shape == y.shape
+        error = (prediction - y)
+        if not self.relative:
+            return error
+        magnitude = y + self.eps
+        return error / magnitude
+
+    def loss(self, prediction, y):
+        u_pred, u_pred_lb, u_pred_ub, f_pred = prediction
+
+        error_u = self._error(u_pred, y)
+        error_b = self._error(u_pred_lb, u_pred_ub)
+        loss_u = error_u ** 2
+        loss_b = error_b ** 2
+        loss_f = f_pred ** 2
+        if self.loss_style == "mean":
+            return torch.mean(loss_u) + torch.mean(loss_b) + torch.mean(self.L*loss_f)
+        elif self.loss_style == "sum":
+            return torch.sum(loss_u) + torch.sum(loss_b) + torch.sum(self.L*loss_f)
+        else:
+            print("loss_style not implemented yet, falling back to default.")
+            return torch.mean(loss_u) + torch.mean(loss_b) + torch.mean(self.L * loss_f)
+
+    def store(self, loss, batch_size):
+        self._running.append(loss.detach())
+        self._batch_sizes.append(batch_size)
+
+    def zero(self):
+        self._running = []
+        self._batch_sizes = []
+
+    def __call__(self, prediction, y, store=True):
+        loss = self.loss(prediction, y)
+        if store:
+            self.store(loss, y.shape[0])
+        return loss
+
+    def finalize(self):
+        with torch.no_grad():
+            losses = torch.stack(self._running)
+
+            batch_sizes = torch.tensor(
+                self._batch_sizes, device=losses.device, dtype=losses.dtype
+            )
+            final_loss = (losses * batch_sizes / batch_sizes.sum()).sum()
+
+            final_loss = final_loss.item()
+
+        if self.best is None or (final_loss < self.best):
+            self.best = final_loss
+            self.last_improve = 0
+        else:
+            self.last_improve += 1
+
+        return {
+            "current": final_loss,
+            "best": self.best,
+            "last_improve": self.last_improve,
+        }
+
+    def state_dict(self):
+        return self.__dict__
+
+    def load_state_dict(self, state_dict):
+        self.__dict__.update(state_dict)
+
+    @property
+    def name(self):
+        prefix = "rel_" if self.relative else ""
+        return f"{prefix}L_Pinn_{self.loss_style}"
+
+
 class Metrics:
     """
     Metrics for the trainer.
@@ -532,6 +675,49 @@ def visualize(
                     y=samples[1].to("cpu").squeeze(),
                     mode="markers",
                     name="samples",
+                )
+            )
+
+    if update_layout is not None:
+        fig.update_layout(update_layout)
+    if file is not None:
+        fig.write_image(file)
+    return fig
+
+
+def visualize_pde(
+        plot_x_axis,
+        plot_t_axis,
+        pde=None,
+        model=None,
+        file=None,
+        update_layout=None,
+        fig=None,
+):
+    """
+    Plot functions along a one-dimensional line.
+    """
+    nx = plot_x_axis.size(dim=0)
+    nt = plot_t_axis.size(dim=0)
+
+    plot_grid = torch.cartesian_prod(plot_t_axis, plot_x_axis).fliplr()
+
+    if fig is None:
+        fig = go.Figure()
+    with torch.no_grad():
+
+        if (pde is not None) and (model is not None):
+            if isinstance(model, torch.nn.Module):
+                model.eval()
+
+            fig.add_trace(
+                go.Heatmap(
+                    x=plot_t_axis.to("cpu").squeeze(),
+                    y=plot_x_axis.to("cpu").squeeze(),
+                    z=torch.abs(pde(plot_grid) - model(plot_grid)).to("cpu").squeeze().view(nt, nx).t(),
+                    name="heatmap",
+                    colorscale='rainbow',
+                    zsmooth="best"
                 )
             )
 

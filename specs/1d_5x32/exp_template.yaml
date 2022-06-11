@@ -182,7 +182,7 @@ preprocessors:
     - 39
 resources_per_trial:
     cpu: 1
-    gpu: 1
+     #gpu: 1
 run:
     __import__: theory2practice.experiments.Trainable
 stop:

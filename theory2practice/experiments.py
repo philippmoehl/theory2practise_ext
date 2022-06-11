@@ -54,9 +54,10 @@ class LogSpecs(Preprocessor):
                 if not target_f.is_file() or self.overwrite:
                     shutil.copy(f, target_f)
                 elif not utils.load_spec(target_f) == utils.load_spec(f):
-                    logger.warning(
-                        f"Different spec at {target_f} but overwrite is false."
-                    )
+                    print(f"Different spec at {target_f} but overwrite is false.")
+                    # logger.warning(
+                    #     f"Different spec at {target_f} but overwrite is false."
+                    # )
 
     def run(self):
         self._log_dir(self.spec_dir, self.log_path / "specs")
@@ -141,6 +142,28 @@ TrainableConfig = namedtuple(
 )
 
 
+TrainablePdeConfig = namedtuple(
+    "TrainablePdeConfig",
+    [
+        "pde",
+        "n_f",
+        "algorithm",
+        "test_grid",
+        "test_losses",
+        "dim",
+        "log_path",
+        "wandb",
+        "plot_x_axis",
+        "plot_t_axis",
+        "plot_save_dir",
+        "device",
+        "dtype",
+        "seed",
+    ],
+    defaults=(None, None, None, "plots", "cuda", torch.float, None),
+)
+
+
 class Trainable(WandbTrainableMixin, ray.tune.Trainable):
     """
     Tune Trainable for executing experiments.
@@ -158,26 +181,41 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
 
         # algorithm
         self.algorithm = config.algorithm
-        self.target_fn = config.target_fn
-        self.target_fn = utils.distribute(self.target_fn, self._device, self._dtype)
 
-        self.algorithm.initialize(
-            self.target_fn, config.n_samples, device=self._device, dtype=self._dtype
-        )
+        if hasattr(config, 'target_fn'):
+            self.target_fn = config.target_fn
+            self.target_fn = utils.distribute(self.target_fn, self._device, self._dtype)
+            self.algorithm.initialize(
+                self.target_fn, config.n_samples, device=self._device, dtype=self._dtype
+            )
+        if hasattr(config, 'pde'):
+            config.pde.to(device=self._device, dtype=self._dtype)
+            self.pde = config.pde
+            self.algorithm.initialize(
+                self.pde, config.n_f, device=self._device, dtype=self._dtype
+            )
 
         # test config
-        config.test_distribution_wrapper.to(device=self._device, dtype=self._dtype)
-        self.test_distribution = config.test_distribution_wrapper.get_distribution()
+        if hasattr(config, 'test_distribution_wrapper'):
+            config.test_distribution_wrapper.to(device=self._device, dtype=self._dtype)
+            self.test_distribution = config.test_distribution_wrapper.get_distribution()
+            self._test_batches = config.test_batches
+            self._test_batch_size = config.test_batch_size
+        if hasattr(config, 'test_grid'):
+            config.test_grid.to(device=self._device, dtype=self._dtype)
+            self.test_grid = config.test_grid
+
         self.metrics = utils.Metrics(losses=config.test_losses)
-        self._test_batches = config.test_batches
-        self._test_batch_size = config.test_batch_size
 
         # plot
-        self._plot_x = config.plot_x
-        self._plot_x_axis = config.plot_x_axis
-
-        if self._plot_x is not None:
-            self._plot_x = self._plot_x.to(device=self._device, dtype=self._dtype)
+        if hasattr(config, 'plot_x'):
+            self._plot_x = config.plot_x
+            self._plot_x_axis = config.plot_x_axis
+            if self._plot_x is not None:
+                self._plot_x = self._plot_x.to(device=self._device, dtype=self._dtype)
+        else:
+            self._plot_x_axis = config.plot_x_axis
+            self._plot_t_axis = config.plot_t_axis
 
         if config.plot_save_dir is None:
             self._plot_save_path = None
@@ -197,9 +235,13 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
             self.algorithm.model.eval()
         self.metrics.zero()
         with torch.no_grad():
-            for _ in range(self._test_batches):
-                x = self.test_distribution.sample((self._test_batch_size,))
-                self.metrics(prediction=self.algorithm.model(x), y=self.target_fn(x))
+            if hasattr(self, 'test_distribution'):
+                for _ in range(self._test_batches):
+                    x = self.test_distribution.sample((self._test_batch_size,))
+                    self.metrics(prediction=self.algorithm.model(x), y=self.target_fn(x))
+            if hasattr(self, 'test_grid'):
+                _x_star = self.test_grid.x_star()
+                self.metrics(prediction=self.algorithm.model(_x_star), y=self.pde.solver(_x_star))
         return self.metrics.finalize()
 
     def _step(self, train=True):
@@ -207,7 +249,7 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
         if train:
             results["train"] = self.algorithm.run()
 
-        if self._plot_x is not None:
+        if hasattr(self, '_plot_x') and self._plot_x is not None:
             file = self._plot_save_path
             if file is not None:
                 file = self._plot_save_path / f"iteration={self.metrics.epoch}.pdf"
@@ -222,6 +264,21 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
                 file=file,
                 update_layout={
                     "title": f"{self.algorithm.samples[0].shape[0]} samples | seed {self.seed}"
+                },
+            )
+
+        elif (self._plot_x_axis is not None) and (self._plot_t_axis is not None):
+            file = self._plot_save_path
+            if file is not None:
+                file = self._plot_save_path / f"iteration={self.metrics.epoch}.pdf"
+            results["visualization"] = utils.visualize_pde(
+                plot_x_axis=self._plot_x_axis,
+                plot_t_axis=self._plot_t_axis,
+                pde=self.pde.solver,
+                model=self.algorithm.model,
+                file=file,
+                update_layout={
+                    "title": "Heatmap", "xaxis_title": "t", "yaxis_title": "x"
                 },
             )
 

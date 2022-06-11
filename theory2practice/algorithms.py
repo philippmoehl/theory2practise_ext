@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 import torch
 from torch import nn
 
+from . import pde_utils
 from . import utils
 
 
@@ -402,6 +403,156 @@ class GdAlgorithm(Algorithm):
                 and self.metrics.epoch % self._scheduler_step_frequency == 0
             ):
                 self.scheduler.step()
+
+        summary["lr"] = self.optimizer.param_groups[0]["lr"]
+        return summary
+
+
+class PinnAlgorithm(Algorithm):
+    """
+    Gradient descent algorithm for Pinns.
+    """
+
+    def __init__(
+        self,
+        grid,
+        model,
+        epochs_per_iteration,
+        data_loader_kwargs,
+        loss,
+        optimizer_factory,
+        optimizer_kwargs,
+        eval_keys=None,
+    ):
+        super().__init__()
+
+        self.grid = grid
+        self.raw_model = model
+
+        # opt
+        self._optimizer_factory = optimizer_factory
+        self._optimizer_kwargs = optimizer_kwargs or {}
+
+        self._epochs_per_iteration = epochs_per_iteration
+        self._data_loader_kwargs = data_loader_kwargs
+        self._loss = loss
+        self.metrics = utils.Metrics(losses=[self._loss])
+        self._eval_keys = eval_keys
+        self._save_attrs = ["raw_model", "metrics", "optimizer"]
+
+        # will be set in initialize method
+        self.pde = None
+        self.n_f = None
+        self._device = None
+        self._dtype = None
+        self._model = None
+        self._f_model = None
+        self.optimizer = None
+        self._data_loader = None
+        self._ic = None
+        self._x_f = None
+        self._t_f = None
+        self._bc_lb = None
+        self._bc_ub = None
+        self._u_ic = None
+
+        self._initialized = False
+
+        self.iter = 0
+
+    def initialize(self, pde, n_f, device="cpu", dtype=torch.float):
+
+        self.pde = pde
+        self.n_f = n_f
+        self._device = device
+        self._dtype = dtype
+
+        if self._eval_keys is not None:
+            for k in self._eval_keys:
+                utils.nested_set(self, k, eval(utils.nested_get(self, k)))
+
+        self._model = utils.distribute(
+            self.raw_model, device=self._device, dtype=self._dtype
+        )
+        self.optimizer = self._optimizer_factory(
+            self._model.parameters(), **self._optimizer_kwargs
+        )
+        self.grid.to(
+            device=self._device, dtype=self._dtype
+        )
+
+        self._x_f, self._t_f = self.grid.sample_f_data(self.n_f)
+        self._ic, self._bc_lb, self._bc_ub = self.grid.x()
+        self._u_ic = self.pde.u0(self.grid.nx, self.grid.x_lb, self.grid.x_ub)
+
+        dataset = pde_utils.PdeDataset()
+        self._data_loader = torch.utils.data.DataLoader(
+            dataset, **self._data_loader_kwargs)
+
+        self._initialized = True
+
+    # TODO: adapt for plotting purposes
+    @property
+    def samples(self):
+        if not self._initialized:
+            raise RuntimeError("Not initialized!")
+
+        return self._x, self._bc_lb, self._bc_ub, self._x_f, self._y
+
+    @property
+    def model(self):
+        if not self._initialized:
+            raise RuntimeError("Not initialized!")
+
+        return self._model
+
+    @property
+    def save_attrs(self):
+        if not self._initialized:
+            raise RuntimeError("Not initialized!")
+
+        return self._save_attrs
+
+    def run(self):
+        if not self._initialized:
+            raise RuntimeError("Not initialized!")
+
+        self._model.train()
+
+        for _ in range(self._epochs_per_iteration):
+            self.metrics.zero()
+            for _ in self._data_loader:
+
+                def closure():
+                    self.optimizer.zero_grad()
+                    # conditions
+                    u_pred_ic = self._model(self._ic)
+                    u_pred_lb = self._model(self._bc_lb)
+                    u_pred_ub = self._model(self._bc_ub)
+                    u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
+
+                    f_pred = pde_utils.enforcer_wrapper(
+                        u_pred_f,
+                        self._t_f,
+                        self._x_f,
+                        self.pde.enforcer,
+                        self.pde.enforcer_args,
+                        self.pde.source if "source" in vars(self.pde) else 0,
+                    )
+
+                    prediction = [u_pred_ic, u_pred_lb, u_pred_ub, f_pred]
+                    loss = self._loss(prediction=prediction, y=self._u_ic, store=False)
+
+                    loss.backward()
+                    self.iter += 1
+                    return loss
+
+                orig_closure_loss = self.optimizer.step(closure=closure)
+
+                self._loss.store(loss=orig_closure_loss, batch_size=1)
+                self.metrics.step += 1
+
+                summary = self.metrics.finalize()
 
         summary["lr"] = self.optimizer.param_groups[0]["lr"]
         return summary
