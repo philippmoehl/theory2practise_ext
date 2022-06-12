@@ -222,7 +222,7 @@ class Algorithm(ABC):
     """
 
     @abstractmethod
-    def initialize(self, target_fn, n_samples, device, dtype):
+    def initialize(self, device, dtype, *args):
         pass
 
     @property
@@ -391,7 +391,8 @@ class GdAlgorithm(Algorithm):
                 self.metrics.step += 1
 
                 if (
-                    self._scheduler_step_unit == "batch"
+                    self.scheduler is not None
+                    and self._scheduler_step_unit == "batch"
                     and self.metrics.step % self._scheduler_step_frequency == 0
                 ):
                     self.scheduler.step()
@@ -399,7 +400,8 @@ class GdAlgorithm(Algorithm):
             summary = self.metrics.finalize()
 
             if (
-                self._scheduler_step_unit == "epoch"
+                self.scheduler is not None
+                and self._scheduler_step_unit == "epoch"
                 and self.metrics.epoch % self._scheduler_step_frequency == 0
             ):
                 self.scheduler.step()
@@ -420,8 +422,13 @@ class PinnAlgorithm(Algorithm):
         epochs_per_iteration,
         data_loader_kwargs,
         loss,
+        n_f,
         optimizer_factory,
         optimizer_kwargs,
+        scheduler_factory=None,
+        scheduler_kwargs=None,
+        scheduler_step_frequency=1,
+        scheduler_step_unit="batch",
         eval_keys=None,
     ):
         super().__init__()
@@ -432,38 +439,41 @@ class PinnAlgorithm(Algorithm):
         # opt
         self._optimizer_factory = optimizer_factory
         self._optimizer_kwargs = optimizer_kwargs or {}
+        self._scheduler_factory = scheduler_factory
+        self._scheduler_kwargs = scheduler_kwargs or {}
+        self._scheduler_step_frequency = scheduler_step_frequency
+        if scheduler_step_unit not in ("batch", "epoch"):
+            raise ValueError("`scheduler_step_unit` must be either `batch` or `epoch`.")
+        self._scheduler_step_unit = scheduler_step_unit
 
         self._epochs_per_iteration = epochs_per_iteration
         self._data_loader_kwargs = data_loader_kwargs
         self._loss = loss
+        self.n_f = n_f
         self.metrics = utils.Metrics(losses=[self._loss])
         self._eval_keys = eval_keys
         self._save_attrs = ["raw_model", "metrics", "optimizer"]
 
         # will be set in initialize method
         self.pde = None
-        self.n_f = None
         self._device = None
         self._dtype = None
         self._model = None
-        self._f_model = None
         self.optimizer = None
+        self.scheduler = None
         self._data_loader = None
         self._ic = None
-        self._x_f = None
-        self._t_f = None
+        self._u_ic = None
         self._bc_lb = None
         self._bc_ub = None
-        self._u_ic = None
+        self._x_f = None
+        self._t_f = None
 
         self._initialized = False
 
-        self.iter = 0
-
-    def initialize(self, pde, n_f, device="cpu", dtype=torch.float):
+    def initialize(self, pde, device="cpu", dtype=torch.float):
 
         self.pde = pde
-        self.n_f = n_f
         self._device = device
         self._dtype = dtype
 
@@ -471,15 +481,22 @@ class PinnAlgorithm(Algorithm):
             for k in self._eval_keys:
                 utils.nested_set(self, k, eval(utils.nested_get(self, k)))
 
+        self.grid.to(
+            device=self._device, dtype=self._dtype
+        )
+
         self._model = utils.distribute(
             self.raw_model, device=self._device, dtype=self._dtype
         )
         self.optimizer = self._optimizer_factory(
             self._model.parameters(), **self._optimizer_kwargs
         )
-        self.grid.to(
-            device=self._device, dtype=self._dtype
-        )
+
+        if self._scheduler_factory is not None:
+            self.scheduler = self._scheduler_factory(
+                self.optimizer, **self._scheduler_kwargs
+            )
+            self._save_attrs.append("scheduler")
 
         self._x_f, self._t_f = self.grid.sample_f_data(self.n_f)
         self._ic, self._bc_lb, self._bc_ub = self.grid.x()
@@ -487,17 +504,16 @@ class PinnAlgorithm(Algorithm):
 
         dataset = pde_utils.PdeDataset()
         self._data_loader = torch.utils.data.DataLoader(
-            dataset, **self._data_loader_kwargs)
-
+            dataset, **self._data_loader_kwargs
+        )
         self._initialized = True
 
-    # TODO: adapt for plotting purposes
     @property
     def samples(self):
         if not self._initialized:
             raise RuntimeError("Not initialized!")
 
-        return self._x, self._bc_lb, self._bc_ub, self._x_f, self._y
+        return self._x_f, self._t_f
 
     @property
     def model(self):
@@ -518,33 +534,25 @@ class PinnAlgorithm(Algorithm):
             raise RuntimeError("Not initialized!")
 
         self._model.train()
-
         for _ in range(self._epochs_per_iteration):
             self.metrics.zero()
+
             for _ in self._data_loader:
 
                 def closure():
                     self.optimizer.zero_grad()
-                    # conditions
-                    u_pred_ic = self._model(self._ic)
-                    u_pred_lb = self._model(self._bc_lb)
-                    u_pred_ub = self._model(self._bc_ub)
+                    # enforce
                     u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
+                    f_pred = self.pde.enforcer(u_pred_f, self._x_f, self._t_f)
 
-                    f_pred = pde_utils.enforcer_wrapper(
-                        u_pred_f,
-                        self._t_f,
-                        self._x_f,
-                        self.pde.enforcer,
-                        self.pde.enforcer_args,
-                        self.pde.source if "source" in vars(self.pde) else 0,
-                    )
-
-                    prediction = [u_pred_ic, u_pred_lb, u_pred_ub, f_pred]
-                    loss = self._loss(prediction=prediction, y=self._u_ic, store=False)
-
+                    predictions = {
+                        "u_pred_ic": self._model(self._ic),
+                        "u_pred_lb": self._model(self._bc_lb),
+                        "u_pred_ub": self._model(self._bc_ub),
+                        "f_pred": f_pred,
+                    }
+                    loss = self._loss(prediction=predictions, y=self._u_ic, store=False)
                     loss.backward()
-                    self.iter += 1
                     return loss
 
                 orig_closure_loss = self.optimizer.step(closure=closure)
@@ -552,7 +560,21 @@ class PinnAlgorithm(Algorithm):
                 self._loss.store(loss=orig_closure_loss, batch_size=1)
                 self.metrics.step += 1
 
-                summary = self.metrics.finalize()
+                if (
+                    self.scheduler is not None
+                    and self._scheduler_step_unit == "batch"
+                    and self.metrics.step % self._scheduler_step_frequency == 0
+                ):
+                    self.scheduler.step()
+
+            summary = self.metrics.finalize()
+
+            if (
+                self.scheduler is not None
+                and self._scheduler_step_unit == "epoch"
+                and self.metrics.epoch % self._scheduler_step_frequency == 0
+            ):
+                self.scheduler.step()
 
         summary["lr"] = self.optimizer.param_groups[0]["lr"]
         return summary

@@ -146,13 +146,13 @@ TrainablePdeConfig = namedtuple(
     "TrainablePdeConfig",
     [
         "pde",
-        "n_f",
         "algorithm",
         "test_grid",
         "test_losses",
         "dim",
         "log_path",
         "wandb",
+        "plot_grid",
         "plot_x_axis",
         "plot_t_axis",
         "plot_save_dir",
@@ -160,7 +160,7 @@ TrainablePdeConfig = namedtuple(
         "dtype",
         "seed",
     ],
-    defaults=(None, None, None, "plots", "cuda", torch.float, None),
+    defaults=(None, None, None, None, "plots", "cuda", torch.float, None),
 )
 
 
@@ -189,10 +189,10 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
                 self.target_fn, config.n_samples, device=self._device, dtype=self._dtype
             )
         if hasattr(config, 'pde'):
-            config.pde.to(device=self._device, dtype=self._dtype)
             self.pde = config.pde
+            self.pde.to(device=self._device, dtype=self._dtype)
             self.algorithm.initialize(
-                self.pde, config.n_f, device=self._device, dtype=self._dtype
+                self.pde, device=self._device, dtype=self._dtype
             )
 
         # test config
@@ -202,8 +202,8 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
             self._test_batches = config.test_batches
             self._test_batch_size = config.test_batch_size
         if hasattr(config, 'test_grid'):
-            config.test_grid.to(device=self._device, dtype=self._dtype)
             self.test_grid = config.test_grid
+            self.test_grid.to(device=self._device, dtype=self._dtype)
 
         self.metrics = utils.Metrics(losses=config.test_losses)
 
@@ -213,10 +213,12 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
             self._plot_x_axis = config.plot_x_axis
             if self._plot_x is not None:
                 self._plot_x = self._plot_x.to(device=self._device, dtype=self._dtype)
-        else:
+        if hasattr(config, 'plot_grid'):
+            self._plot_grid = config.plot_grid
             self._plot_x_axis = config.plot_x_axis
             self._plot_t_axis = config.plot_t_axis
-
+            if self._plot_grid is not None:
+                self._plot_grid = self._plot_grid.to(device=self._device, dtype=self._dtype)
         if config.plot_save_dir is None:
             self._plot_save_path = None
         else:
@@ -267,18 +269,23 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
                 },
             )
 
-        elif (self._plot_x_axis is not None) and (self._plot_t_axis is not None):
+        if hasattr(self, '_plot_grid') and self._plot_grid is not None:
             file = self._plot_save_path
             if file is not None:
                 file = self._plot_save_path / f"iteration={self.metrics.epoch}.pdf"
             results["visualization"] = utils.visualize_pde(
+                plot_grid=self._plot_grid,
                 plot_x_axis=self._plot_x_axis,
                 plot_t_axis=self._plot_t_axis,
                 pde=self.pde.solver,
                 model=self.algorithm.model,
+                samples=self.algorithm.samples,
                 file=file,
                 update_layout={
-                    "title": "Heatmap", "xaxis_title": "t", "yaxis_title": "x"
+                    "title": f"{self.algorithm.grid.nx} nx || {self.algorithm.grid.nt} nt || "
+                             f"{self.algorithm.samples[0].shape[0]} samples || seed {self.seed}",
+                    "xaxis_title": "t",
+                    "yaxis_title": "x"
                 },
             )
 

@@ -16,6 +16,9 @@ config/__spec__/algorithm:
         __call__: theory2practice.utils.PinnLoss
         L: 1
         loss_style: mean
+    n_f:
+        grid_search:
+            - 100
     model:
         __call__: theory2practice.algorithms.FeedForward
         activation:

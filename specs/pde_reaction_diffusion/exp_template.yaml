@@ -8,9 +8,6 @@ config:
         dtype:
             __import__: torch.float
         log_path: results/pde_reaction_diffusion
-        n_f:
-            grid_search:
-            - 100
         plot_save_dir: plots
         plot_x_axis:
             __call__: theory2practice.utils.create_tensor
@@ -27,6 +24,15 @@ config:
             end: 1
             start: 0
             steps: 100
+        plot_grid:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.cartesian_prod
+            __args__:
+            - eval: spec.config.plot_t_axis
+            - eval: spec.config.plot_x_axis
+            methods:
+            - name: fliplr
         seed:
             grid_search:
             - 0

@@ -29,6 +29,7 @@ DUMPER = {
 }
 
 CALL_KEY = "__call__"
+ARGS_KEY = "__args__"
 IMPORT_KEY = "__import__"
 SPEC_KEY = "__spec__"
 FILE_KEY = "__file__"
@@ -204,14 +205,18 @@ def deserialize_spec(spec):
         keys = [k for k in spec if k in SERIALIZATION_KEYS]
         if len(keys) == 0:
             return {k: deserialize_spec(v) for k, v in spec.items()}
-        elif len(keys) == 1:
+        elif len(keys) >= 1:
             key = keys[0]
             if key == CALL_KEY:
                 cls_ptr = import_string(spec[key])
+                if ARGS_KEY in spec.keys():
+                    cls_args = deserialize_spec(spec[ARGS_KEY])
+                else:
+                    cls_args = []
                 cls_kwargs = {
-                    k: deserialize_spec(v) for k, v in spec.items() if not k == CALL_KEY
+                    k: deserialize_spec(v) for k, v in spec.items() if k not in [CALL_KEY, ARGS_KEY]
                 }
-                return cls_ptr(**cls_kwargs)
+                return cls_ptr(*cls_args, **cls_kwargs)
             elif key == ENVIRON_KEY:
                 default = spec.get(ENVIRON_DEFAULT_KEY, "")
                 return os.environ.get(spec[key], default)
@@ -280,16 +285,16 @@ def distribute(module, device="cpu", dtype=torch.float):
     return module
 
 
-def create_tensor(data=None, creation_op=None, methods=None, **kwargs):
+def create_tensor(*args, data=None, creation_op=None, methods=None, **kwargs):
     """
     Utility function to create torch tensors.
     """
     if (data is None) is (creation_op is None):
         raise ValueError("Either `data` or `creation_op` needs to be specified!")
     if data is not None:
-        tensor = torch.tensor(data, **kwargs)
+        tensor = torch.tensor(data, *args, **kwargs)
     else:
-        tensor = creation_op(**kwargs)
+        tensor = creation_op(*args, **kwargs)
     if methods is not None:
         for method in methods:
             tensor = getattr(tensor, method["name"])(
@@ -298,31 +303,11 @@ def create_tensor(data=None, creation_op=None, methods=None, **kwargs):
     return tensor
 
 
-class DistributionWrapper(torch.nn.Module):
-    """
-    Distribution module.
-    """
-
-    # see https://github.com/pytorch/pytorch/issues/7795
-    def __init__(
-        self,
-        distribution_factory,
-        *args,
-        tensor_kwargs=None,
-        **kwargs,
-    ):
-        super().__init__()
-        self.distribution_factory = distribution_factory
-        self.args = args
-        self.kwargs = kwargs
-        if tensor_kwargs is not None:
-            for k, v in tensor_kwargs.items():
-                self.register_buffer(k, torch.as_tensor(v))
-
-    def get_distribution(self):
-        return self.distribution_factory(
-            *self.args, **dict(self.named_buffers()), **self.kwargs
-        )
+def create_tensor_grid(nx, nt, x_lb, x_ub, t_min, t_max):
+    """Grid of space, time."""
+    _X = torch.linspace(x_lb, x_ub, steps=nx + 1)
+    _T = torch.linspace(t_min, t_max, steps=nt)
+    return torch.meshgrid(_X, _T, indexing='xy')
 
 
 class TensorGrid:
@@ -371,6 +356,33 @@ class TensorGrid:
         """Sets the device and dtype."""
         self.X.to(device=device, dtype=dtype)
         self.T.to(device=device, dtype=dtype)
+
+
+class DistributionWrapper(torch.nn.Module):
+    """
+    Distribution module.
+    """
+
+    # see https://github.com/pytorch/pytorch/issues/7795
+    def __init__(
+        self,
+        distribution_factory,
+        *args,
+        tensor_kwargs=None,
+        **kwargs,
+    ):
+        super().__init__()
+        self.distribution_factory = distribution_factory
+        self.args = args
+        self.kwargs = kwargs
+        if tensor_kwargs is not None:
+            for k, v in tensor_kwargs.items():
+                self.register_buffer(k, torch.as_tensor(v))
+
+    def get_distribution(self):
+        return self.distribution_factory(
+            *self.args, **dict(self.named_buffers()), **self.kwargs
+        )
 
 
 class Loss(ABC):
@@ -513,27 +525,37 @@ class PinnLoss(Loss):
 
     def _error(self, prediction, y):
         assert prediction.shape == y.shape
-        error = (prediction - y)
+        error = (prediction - y).abs()
         if not self.relative:
             return error
-        magnitude = y + self.eps
+        magnitude = y.abs() + self.eps
         return error / magnitude
 
-    def loss(self, prediction, y):
-        u_pred, u_pred_lb, u_pred_ub, f_pred = prediction
+    def loss_bc(self, prediction_lb, prediction_ub):
+        error_bc = self._error(prediction_lb, prediction_ub)
+        return error_bc**2
 
-        error_u = self._error(u_pred, y)
-        error_b = self._error(u_pred_lb, u_pred_ub)
-        loss_u = error_u ** 2
-        loss_b = error_b ** 2
-        loss_f = f_pred ** 2
+    def loss_ic(self, prediction, u0):
+        error_ic = self._error(prediction, u0)
+        return error_ic**2
+
+    def loss(self, prediction, u0):
+        u_pred_ic = prediction["u_pred_ic"]
+        u_pred_lb = prediction["u_pred_lb"]
+        u_pred_ub = prediction["u_pred_ub"]
+        f_pred = prediction["f_pred"]
+
+        _loss_ic = self.loss_ic(u_pred_ic, u0)
+        _loss_bc = self.loss_bc(u_pred_lb, u_pred_ub)
+        _loss_f = f_pred ** 2
+
         if self.loss_style == "mean":
-            return torch.mean(loss_u) + torch.mean(loss_b) + torch.mean(self.L*loss_f)
+            return torch.mean(_loss_ic) + torch.mean(_loss_bc) + self.L * torch.mean(_loss_f)
         elif self.loss_style == "sum":
-            return torch.sum(loss_u) + torch.sum(loss_b) + torch.sum(self.L*loss_f)
+            return torch.sum(_loss_ic) + torch.sum(_loss_bc) + self.L * torch.sum(_loss_f)
         else:
             print("loss_style not implemented yet, falling back to default.")
-            return torch.mean(loss_u) + torch.mean(loss_b) + torch.mean(self.L * loss_f)
+            return torch.mean(_loss_ic) + torch.mean(_loss_bc) + self.L * torch.mean(_loss_f)
 
     def store(self, loss, batch_size):
         self._running.append(loss.detach())
@@ -557,7 +579,6 @@ class PinnLoss(Loss):
                 self._batch_sizes, device=losses.device, dtype=losses.dtype
             )
             final_loss = (losses * batch_sizes / batch_sizes.sum()).sum()
-
             final_loss = final_loss.item()
 
         if self.best is None or (final_loss < self.best):
@@ -686,10 +707,12 @@ def visualize(
 
 
 def visualize_pde(
+        plot_grid,
         plot_x_axis,
         plot_t_axis,
         pde=None,
         model=None,
+        samples=None,
         file=None,
         update_layout=None,
         fig=None,
@@ -699,8 +722,6 @@ def visualize_pde(
     """
     nx = plot_x_axis.size(dim=0)
     nt = plot_t_axis.size(dim=0)
-
-    plot_grid = torch.cartesian_prod(plot_t_axis, plot_x_axis).fliplr()
 
     if fig is None:
         fig = go.Figure()
@@ -716,8 +737,19 @@ def visualize_pde(
                     y=plot_x_axis.to("cpu").squeeze(),
                     z=torch.abs(pde(plot_grid) - model(plot_grid)).to("cpu").squeeze().view(nt, nx).t(),
                     name="heatmap",
-                    colorscale='rainbow',
+                    colorscale='greys',
                     zsmooth="best"
+                )
+            )
+
+        if samples is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=samples[1].to("cpu").squeeze(),
+                    y=samples[0].to("cpu").squeeze(),
+                    mode="markers",
+                    name="samples",
+                    marker=dict(color="limegreen"),
                 )
             )
 

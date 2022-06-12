@@ -30,7 +30,7 @@ class PdeDataset(torch.utils.data.Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        return None
+        return 0
 
 
 def create_tensor_grid(nx, nt, x_lb, x_ub, t_min, t_max):
