@@ -11,7 +11,7 @@ config/__spec__/algorithm:
         nt:
             grid_search:
             - 100
-    epochs_per_iteration: 1000
+    epochs_per_iteration: 100
     loss:
         __call__: theory2practice.utils.PinnLoss
         L: 1

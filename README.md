@@ -1,11 +1,21 @@
-# Accurate Learning with Neural Networks - from Theory to Practice
+# Theory to Practise - Extension
 
-> Accompanying code for the paper ['Training ReLU Networks to high uniform accuracy is 
-> intractable'](https://arxiv.org/abs/2205.13531). Implemented in [PyTorch](https://pytorch.org/), experiment execution and tracking using [Ray Tune](https://www.ray.io/ray-tune) 
-> and [Weights & Biases](https://wandb.ai/).
+This is an extension to the original experiment script in [Accurate Learning with Neural Networks - from Theory to 
+Practice](https://github.com/juliusberner/theory2practice).
 
-![Illustration of a learned neural network with small average but large uniform error.](illustration.png)
+![Illustration of a learned neural network with small average but large uniform error.](illustration1.png)
 
+
+
+### Extensions (state 12.06.2022):
+* physical informed neural networks (PINNs)
+* periodic PDEs - mentioned in [Characterizing possible failure modes in physics-informed neural networks](
+https://arxiv.org/abs/2109.01050)
+   * convection
+   * diffusion
+   * reaction
+   * reaction-diffusion
+  
 ## Install
 
 This code was tested with Python 3.9.7. 

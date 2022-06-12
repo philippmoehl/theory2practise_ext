@@ -48,7 +48,7 @@ def default_config2name(config, trial_df):
         "."
     )[-1]
     scheduler_name = (
-        utils.nested_get(config, "algorithm/scheduler_factory/__import__")
+        utils.nested_get(config, "algorithm/scheduler_factory/__import__", "")
         .split(".")[-1]
         .replace("LR", "")
     )
@@ -84,8 +84,10 @@ def default_config2name(config, trial_df):
     if params_file:
         target_fn = Path(utils.nested_get(config, "target_fn/params_file")).stem
     else:
-        target_fn = utils.nested_get(config, "target_fn/__call__").split(".")[-1]
-
+        target_fn = utils.nested_get(
+            config,
+            f"{'pde' if 'pde' in config else 'target_fn'}/__call__"
+        ).split(".")[-1]
     return {
         "algorithm": f"{model_name}_{opt_name}_{lr}{scheduler_name}_Bs{bs}x{epochs_per_iteration}",
         "target_fn": target_fn,
@@ -188,6 +190,7 @@ class Visualizer:
             trial_df.loc[:, "dim"] = utils.nested_get(config, self.keys["dim"])
             names = self.config2name(config, trial_df)
             trial_df.loc[:, "algorithm_name"] = names["algorithm"]
+            # TODO: target_fn -> pde
             trial_df.loc[:, "target_fn"] = names["target_fn"]
             trial_df.loc[:, "path"] = path
             trial_dfs.append(trial_df)

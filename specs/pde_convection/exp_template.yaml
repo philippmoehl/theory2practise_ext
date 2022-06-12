@@ -78,4 +78,4 @@ resources_per_trial:
 run:
     __import__: theory2practice.experiments.Trainable
 stop:
-    training_iteration: 1
+    training_iteration: 10
