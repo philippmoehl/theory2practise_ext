@@ -12,7 +12,7 @@ def main(argv=None):
         "--exp-files",
         nargs="+",
         type=str,
-        default=["specs/test/exp_0.yaml"],
+        default=["specs/pde_convection/exp_0.yaml"],
         help="Experiment spec files.",
     )
     parser.add_argument(

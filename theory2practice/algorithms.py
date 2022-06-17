@@ -3,7 +3,6 @@ from abc import ABC, abstractmethod
 import torch
 from torch import nn
 
-from . import pde_utils
 from . import utils
 
 
@@ -222,7 +221,7 @@ class Algorithm(ABC):
     """
 
     @abstractmethod
-    def initialize(self, device, dtype, *args):
+    def initialize(self, target_fn, n_samples, device, dtype):
         pass
 
     @property
@@ -456,6 +455,7 @@ class PinnAlgorithm(Algorithm):
 
         # will be set in initialize method
         self.pde = None
+        self.n_samples = None
         self._device = None
         self._dtype = None
         self._model = None
@@ -468,12 +468,16 @@ class PinnAlgorithm(Algorithm):
         self._bc_ub = None
         self._x_f = None
         self._t_f = None
+        self._x = None
+        self._t = None
+        self._u = None
 
         self._initialized = False
 
-    def initialize(self, pde, device="cpu", dtype=torch.float):
+    def initialize(self, pde, n_samples, device="cpu", dtype=torch.float):
 
         self.pde = pde
+        self.n_samples = n_samples
         self._device = device
         self._dtype = dtype
 
@@ -498,14 +502,21 @@ class PinnAlgorithm(Algorithm):
             )
             self._save_attrs.append("scheduler")
 
-        self._x_f, self._t_f = self.grid.sample_f_data(self.n_f)
-        self._ic, self._bc_lb, self._bc_ub = self.grid.x()
+        self._x_f, self._t_f = self.grid.sample(self.n_f)
+        self._x_f.requires_grad_()
+        self._t_f.requires_grad_()
+        self._ic, self._bc_lb, self._bc_ub = self.grid.conds()
         self._u_ic = self.pde.u0(self.grid.nx, self.grid.x_lb, self.grid.x_ub)
 
-        # dataset = pde_utils.PdeDataset()
-        # self._data_loader = torch.utils.data.DataLoader(
-        #     dataset, **self._data_loader_kwargs
-        # )
+        self._x, self._t = self.grid.sample(self.n_samples)
+        self._u = self.pde.u(self._x, self._t, self.grid.full_grid())
+
+        dataset = torch.utils.data.TensorDataset(self._x, self._t, self._u)
+
+        self._data_loader = torch.utils.data.DataLoader(
+            dataset, **self._data_loader_kwargs
+        )
+
         self._initialized = True
 
     @property
@@ -513,7 +524,7 @@ class PinnAlgorithm(Algorithm):
         if not self._initialized:
             raise RuntimeError("Not initialized!")
 
-        return self._x_f, self._t_f
+        return self._x, self._t
 
     @property
     def model(self):
@@ -537,35 +548,76 @@ class PinnAlgorithm(Algorithm):
         for _ in range(self._epochs_per_iteration):
             self.metrics.zero()
 
-            # for _ in self._data_loader:
+            # data input
+            if len(self._data_loader) > 0:
 
-            def closure():
-                self.optimizer.zero_grad()
-                # enforce
-                u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
-                f_pred = self.pde.enforcer(u_pred_f, self._x_f, self._t_f)
+                for x, t, u in self._data_loader:
 
-                predictions = {
-                    "u_pred_ic": self._model(self._ic),
-                    "u_pred_lb": self._model(self._bc_lb),
-                    "u_pred_ub": self._model(self._bc_ub),
-                    "f_pred": f_pred,
-                }
-                loss = self._loss(prediction=predictions, y=self._u_ic, store=False)
-                loss.backward()
-                return loss
+                    def closure():
+                        self.optimizer.zero_grad()
+                        # enforce
+                        u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
+                        f_pred = self.pde.enforcer(u_pred_f, self._x_f, self._t_f)
 
-            orig_closure_loss = self.optimizer.step(closure=closure)
+                        predictions = {
+                            "u_pred": self._model(torch.cat([x, t], dim=1)),
+                            "u_pred_ic": self._model(self._ic),
+                            "u_pred_lb": self._model(self._bc_lb),
+                            "u_pred_ub": self._model(self._bc_ub),
+                            "f_pred": f_pred,
+                        }
+                        y = {
+                            "u": u,
+                            "u_ic": self._u_ic,
+                        }
+                        loss = self._loss(prediction=predictions, y=y, store=False)
+                        loss.backward()
+                        return loss
 
-            self._loss.store(loss=orig_closure_loss, batch_size=1)
-            self.metrics.step += 1
+                    orig_closure_loss = self.optimizer.step(closure=closure)
 
-            if (
-                self.scheduler is not None
-                and self._scheduler_step_unit == "batch"
-                and self.metrics.step % self._scheduler_step_frequency == 0
-            ):
-                self.scheduler.step()
+                    self._loss.store(loss=orig_closure_loss, batch_size=1)
+                    self.metrics.step += 1
+
+                    if (
+                        self.scheduler is not None
+                        and self._scheduler_step_unit == "batch"
+                        and self.metrics.step % self._scheduler_step_frequency == 0
+                    ):
+                        self.scheduler.step()
+
+            # no data input
+            else:
+                def closure():
+                    self.optimizer.zero_grad()
+                    # enforce
+                    u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
+                    f_pred = self.pde.enforcer(u_pred_f, self._x_f, self._t_f)
+
+                    predictions = {
+                        "u_pred_ic": self._model(self._ic),
+                        "u_pred_lb": self._model(self._bc_lb),
+                        "u_pred_ub": self._model(self._bc_ub),
+                        "f_pred": f_pred,
+                    }
+                    y = {
+                        "u_ic": self._u_ic,
+                    }
+                    loss = self._loss(prediction=predictions, y=y, store=False)
+                    loss.backward()
+                    return loss
+
+                orig_closure_loss = self.optimizer.step(closure=closure)
+
+                self._loss.store(loss=orig_closure_loss, batch_size=1)
+                self.metrics.step += 1
+
+                if (
+                        self.scheduler is not None
+                        and self._scheduler_step_unit == "batch"
+                        and self.metrics.step % self._scheduler_step_frequency == 0
+                ):
+                    self.scheduler.step()
 
             summary = self.metrics.finalize()
 

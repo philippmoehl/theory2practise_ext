@@ -2,7 +2,9 @@ __file__: specs/pde_reaction_diffusion/exp_template.yaml
 config/__spec__/algorithm:
     __call__: theory2practice.algorithms.PinnAlgorithm
     data_loader_kwargs:
-        batch_size: 1
+        batch_size:
+            eval: int(np.maximum(spec.config.n_samples, 1))
+        shuffle: false
     grid:
         __call__: theory2practice.utils.TensorGrid
         nx:
@@ -14,7 +16,7 @@ config/__spec__/algorithm:
     epochs_per_iteration: 1
     loss:
         __call__: theory2practice.utils.PinnLoss
-        L: 1
+        loss_factor: 1
         loss_style: mean
     n_f:
         grid_search:

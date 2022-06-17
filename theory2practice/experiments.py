@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +11,16 @@ import torch
 import wandb
 
 from . import utils
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)
+
+formatter = logging.Formatter("%(asctime)s %(levelname)s %(module)s.py:%(lineno)d  -- %(message)s")
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+
+logger.addHandler(stream_handler)
 
 
 class Preprocessor(ABC):
@@ -54,10 +65,9 @@ class LogSpecs(Preprocessor):
                 if not target_f.is_file() or self.overwrite:
                     shutil.copy(f, target_f)
                 elif not utils.load_spec(target_f) == utils.load_spec(f):
-                    print(f"Different spec at {target_f} but overwrite is false.")
-                    # logger.warning(
-                    #     f"Different spec at {target_f} but overwrite is false."
-                    # )
+                    logger.warning(
+                        f"Different spec at {target_f} but overwrite is false."
+                    )
 
     def run(self):
         self._log_dir(self.spec_dir, self.log_path / "specs")
@@ -71,7 +81,7 @@ class ModelSaver(Preprocessor):
     def __init__(self, model_spec, path, seeds=0, overwrite=False):
         self.model_spec = model_spec
         self.path = utils.absolute_path(path)
-        if not (isinstance(seeds, list) or isinstance(seeds, tuple)):
+        if not isinstance(seeds, (list, tuple)):
             seeds = [seeds]
         self.seeds = seeds
         self.overwrite = overwrite
@@ -146,6 +156,7 @@ TrainablePdeConfig = namedtuple(
     "TrainablePdeConfig",
     [
         "pde",
+        "n_samples",
         "algorithm",
         "test_grid",
         "test_losses",
@@ -182,38 +193,38 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
         # algorithm
         self.algorithm = config.algorithm
 
-        if hasattr(config, 'target_fn'):
+        if hasattr(config, "target_fn"):
             self.target_fn = config.target_fn
             self.target_fn = utils.distribute(self.target_fn, self._device, self._dtype)
             self.algorithm.initialize(
                 self.target_fn, config.n_samples, device=self._device, dtype=self._dtype
             )
-        if hasattr(config, 'pde'):
+        if hasattr(config, "pde"):
             self.pde = config.pde
             self.pde.to(device=self._device, dtype=self._dtype)
             self.algorithm.initialize(
-                self.pde, device=self._device, dtype=self._dtype
+                self.pde, config.n_samples, device=self._device, dtype=self._dtype
             )
 
         # test config
-        if hasattr(config, 'test_distribution_wrapper'):
+        if hasattr(config, "test_distribution_wrapper"):
             config.test_distribution_wrapper.to(device=self._device, dtype=self._dtype)
             self.test_distribution = config.test_distribution_wrapper.get_distribution()
             self._test_batches = config.test_batches
             self._test_batch_size = config.test_batch_size
-        if hasattr(config, 'test_grid'):
+        if hasattr(config, "test_grid"):
             self.test_grid = config.test_grid
             self.test_grid.to(device=self._device, dtype=self._dtype)
 
         self.metrics = utils.Metrics(losses=config.test_losses)
 
         # plot
-        if hasattr(config, 'plot_x'):
+        if hasattr(config, "plot_x"):
             self._plot_x = config.plot_x
             self._plot_x_axis = config.plot_x_axis
             if self._plot_x is not None:
                 self._plot_x = self._plot_x.to(device=self._device, dtype=self._dtype)
-        if hasattr(config, 'plot_grid'):
+        if hasattr(config, "plot_grid"):
             self._plot_grid = config.plot_grid
             self._plot_x_axis = config.plot_x_axis
             self._plot_t_axis = config.plot_t_axis
@@ -237,13 +248,13 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
             self.algorithm.model.eval()
         self.metrics.zero()
         with torch.no_grad():
-            if hasattr(self, 'test_distribution'):
+            if hasattr(self, "test_distribution"):
                 for _ in range(self._test_batches):
                     x = self.test_distribution.sample((self._test_batch_size,))
                     self.metrics(prediction=self.algorithm.model(x), y=self.target_fn(x))
-            if hasattr(self, 'test_grid'):
-                _x_star = self.test_grid.x_star()
-                self.metrics(prediction=self.algorithm.model(_x_star), y=self.pde.solver(_x_star))
+            if hasattr(self, "test_grid"):
+                full_grid = self.test_grid.full_grid()
+                self.metrics(prediction=self.algorithm.model(full_grid), y=self.pde.solver(full_grid))
         return self.metrics.finalize()
 
     def _step(self, train=True):
@@ -251,7 +262,7 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
         if train:
             results["train"] = self.algorithm.run()
 
-        if hasattr(self, '_plot_x') and self._plot_x is not None:
+        if hasattr(self, "_plot_x") and self._plot_x is not None:
             file = self._plot_save_path
             if file is not None:
                 file = self._plot_save_path / f"iteration={self.metrics.epoch}.pdf"
@@ -269,7 +280,7 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
                 },
             )
 
-        if hasattr(self, '_plot_grid') and self._plot_grid is not None:
+        if hasattr(self, "_plot_grid") and self._plot_grid is not None:
             file = self._plot_save_path
             if file is not None:
                 file = self._plot_save_path / f"iteration={self.metrics.epoch}.pdf"

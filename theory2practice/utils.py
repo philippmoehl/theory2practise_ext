@@ -14,8 +14,6 @@ import numpy as np
 import plotly.graph_objects as go
 import torch
 
-from .pde_utils import *
-
 _NO_DEFAULT = object()
 WANDB_HOST = "api.wandb.ai"
 WANDB_API_KEY = "WANDB_API_KEY"
@@ -260,7 +258,7 @@ def determinism(seed):
     Set seeds and flags for deterministic experiments.
     """
     # see https://github.com/ray-project/ray/issues/8569
-    import torch
+    # import torch
 
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True)
@@ -305,9 +303,9 @@ def create_tensor(*args, data=None, creation_op=None, methods=None, **kwargs):
 
 def create_tensor_grid(nx, nt, x_lb, x_ub, t_min, t_max):
     """Grid of space, time."""
-    _X = torch.linspace(x_lb, x_ub, steps=nx + 1)
-    _T = torch.linspace(t_min, t_max, steps=nt)
-    return torch.meshgrid(_X, _T, indexing='xy')
+    x_space = torch.linspace(x_lb, x_ub, steps=nx + 1)
+    t_space = torch.linspace(t_min, t_max, steps=nt)
+    return torch.meshgrid(x_space, t_space, indexing="xy")
 
 
 class TensorGrid:
@@ -323,39 +321,39 @@ class TensorGrid:
         self.t_min = t_min
         self.t_max = t_max
 
-        self.X, self.T = create_tensor_grid(nx, nt, self.x_lb, self.x_ub,
-                                            self.t_min, self.t_max)
+        self._x_mesh, self._t_mesh = create_tensor_grid(nx, nt, self.x_lb, self.x_ub,
+                                                      self.t_min, self.t_max)
 
-    def sample_f_data(self, n_f):
+    def sample(self, n_samples):
         """No_initial_no_boundary, requires_grad for enforcing pde."""
-        inner_X = self.X[1:, 1:-1].flatten().view(-1, 1)
-        inner_T = self.T[1:, 1:-1].flatten().view(-1, 1)
+        x_inner_mesh = self._x_mesh[1:, 1:-1].flatten().view(-1, 1)
+        t_inner_mesh = self._t_mesh[1:, 1:-1].flatten().view(-1, 1)
 
-        idx = torch.randperm(inner_X.size()[0])[:n_f]
+        idx = torch.randperm(x_inner_mesh.size()[0])[:n_samples]
 
-        return inner_X[idx].requires_grad_(), inner_T[idx].requires_grad_()
+        return x_inner_mesh[idx], t_inner_mesh[idx]
 
-    def x(self):
+    def conds(self):
         # initial condition, from x = [-end, +end] and t=0
-        ic = torch.cat([self.X[:1, :-1].t(), self.T[:1, :-1].t()], dim=1)
+        ic = torch.cat([self._x_mesh[:1, :-1].t(), self._t_mesh[:1, :-1].t()], dim=1)
         # boundary condition at x = 0, and t = [0, 1]
-        bc_lb = torch.cat([self.X[:, :1], self.T[:, :1]], dim=1)
+        bc_lb = torch.cat([self._x_mesh[:, :1], self._t_mesh[:, :1]], dim=1)
         # at x = end
-        bc_ub = torch.cat([self.X[:, -1:], self.T[:, -1:]], dim=1)
+        bc_ub = torch.cat([self._x_mesh[:, -1:], self._t_mesh[:, -1:]], dim=1)
 
         return ic, bc_lb, bc_ub
 
-    def x_star(self):
-        _x_star = torch.cat([
-            self.X[:, :-1].flatten().view(-1, 1),
-            self.T[:, :-1].flatten().view(-1, 1)
+    def full_grid(self):
+        full_grid = torch.cat([
+            self._x_mesh[:, :-1].flatten().view(-1, 1),
+            self._t_mesh[:, :-1].flatten().view(-1, 1)
         ], dim=1)
-        return _x_star
+        return full_grid
 
     def to(self, dtype, device):
         """Sets the device and dtype."""
-        self.X.to(device=device, dtype=dtype)
-        self.T.to(device=device, dtype=dtype)
+        self._x_mesh.to(device=device, dtype=dtype)
+        self._t_mesh.to(device=device, dtype=dtype)
 
 
 class DistributionWrapper(torch.nn.Module):
@@ -508,15 +506,16 @@ class PinnLoss(Loss):
     Pinn losses.
     """
 
-    def __init__(self, L=1.0, loss_style="mean", eps=1.0, relative=False):
+    def __init__(self, loss_factor=1.0, loss_style="mean", eps=1.0, relative=False, data=False):
 
-        if not (loss_style in ["mean", "sum"]):
+        if loss_style not in ["mean", "sum"]:
             raise ValueError("loss_style can either be a `mean` or `sum`.")
 
         self.loss_style = loss_style
-        self.L = L
+        self.loss_factor = loss_factor
         self.eps = eps
         self.relative = relative
+        self.data = data
 
         self.best = None
         self.last_improve = None
@@ -539,23 +538,39 @@ class PinnLoss(Loss):
         error_ic = self._error(prediction, u0)
         return error_ic**2
 
-    def loss(self, prediction, u0):
+    def loss(self, prediction, y):
+        if ("u_pred" in prediction.keys()) and ("u" in y.keys()):
+            u_pred = prediction["u_pred"]
+            u = y["u"]
+            error = self._error(u_pred, u)
+            loss_data = error**2
+        else:
+            loss_data = None
+
         u_pred_ic = prediction["u_pred_ic"]
         u_pred_lb = prediction["u_pred_lb"]
         u_pred_ub = prediction["u_pred_ub"]
         f_pred = prediction["f_pred"]
 
-        _loss_ic = self.loss_ic(u_pred_ic, u0)
-        _loss_bc = self.loss_bc(u_pred_lb, u_pred_ub)
-        _loss_f = f_pred ** 2
+        u_ic = y["u_ic"]
+
+        loss_ic = self.loss_ic(u_pred_ic, u_ic)
+        loss_bc = self.loss_bc(u_pred_lb, u_pred_ub)
+        loss_f = f_pred ** 2
 
         if self.loss_style == "mean":
-            return torch.mean(_loss_ic) + torch.mean(_loss_bc) + self.L * torch.mean(_loss_f)
+            loss_full = torch.mean(loss_ic) + torch.mean(loss_bc) + self.loss_factor * torch.mean(loss_f)
+            if loss_data is not None:
+                loss_full += torch.mean(loss_data)
         elif self.loss_style == "sum":
-            return torch.sum(_loss_ic) + torch.sum(_loss_bc) + self.L * torch.sum(_loss_f)
+            loss_full = torch.sum(loss_ic) + torch.sum(loss_bc) + self.loss_factor * torch.sum(loss_f)
+            if loss_data is not None:
+                loss_full += torch.sum(loss_data)
         else:
             print("loss_style not implemented yet, falling back to default.")
-            return torch.mean(_loss_ic) + torch.mean(_loss_bc) + self.L * torch.mean(_loss_f)
+            return torch.mean(loss_ic) + torch.mean(loss_bc) + self.loss_factor * torch.mean(loss_f)
+
+        return loss_full
 
     def store(self, loss, batch_size):
         self._running.append(loss.detach())
@@ -737,12 +752,12 @@ def visualize_pde(
                     y=plot_x_axis.to("cpu").squeeze(),
                     z=torch.abs(pde(plot_grid) - model(plot_grid)).to("cpu").squeeze().view(nt, nx).t(),
                     name="heatmap",
-                    colorscale='greys',
+                    colorscale="greys",
                     zsmooth="best"
                 )
             )
 
-        if samples is not None:
+        if samples is not None and len(samples[0]) > 0:
             fig.add_trace(
                 go.Scatter(
                     x=samples[1].to("cpu").squeeze(),
@@ -784,5 +799,5 @@ def setup(netrc_file=None):
     except FileNotFoundError:
         pass
 
-    if not os.environ.get(WANDB_API_KEY, NO_WANDB_API_KEY) == NO_WANDB_API_KEY:
+    if os.environ.get(WANDB_API_KEY, NO_WANDB_API_KEY) != NO_WANDB_API_KEY:
         os.environ["WANDB_MODE"] = "run"

@@ -29,5 +29,5 @@ tune_run_kwargs:
     resume: false
     sync_config:
         __call__: ray.tune.SyncConfig
-        sync_to_driver: false
+        sync_to_driver: true
     verbose: 1

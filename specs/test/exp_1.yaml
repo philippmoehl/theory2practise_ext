@@ -1,0 +1,96 @@
+__call__: theory2practice.experiments.Experiment
+checkpoint_freq: 1
+config:
+    __spec__:
+        __call__: theory2practice.experiments.TrainablePdeConfig
+        algorithm:
+            __call__: theory2practice.algorithms.PinnAlgorithm
+            data_loader_kwargs:
+                batch_size:
+                    eval: int(np.maximum(spec.config.n_samples, 1))
+                shuffle: false
+            grid:
+                __call__: theory2practice.utils.TensorGrid
+                nx:
+                    grid_search:
+                    - 256
+                nt:
+                    grid_search:
+                    - 100
+            epochs_per_iteration: 1
+            loss:
+                __call__: theory2practice.utils.PinnLoss
+                loss_factor: 1
+                loss_style: mean
+            n_f:
+                grid_search:
+                - 100
+            model:
+              __call__: theory2practice.algorithms.FeedForward
+              activation:
+                  __call__: torch.nn.Tanh
+              depth: 5
+              input_dim: 2
+              width: 50
+            optimizer_factory:
+                __import__: torch.optim.LBFGS
+            optimizer_kwargs:
+                lr: 1
+                max_iter: 100000
+                max_eval: null
+                history_size: 50
+                tolerance_grad: 1.0e-7
+                tolerance_change: 1.0e-7
+                line_search_fn: strong_wolfe
+        dim: 1
+        dtype:
+            __import__: torch.float
+        log_path: results/test
+        n_samples: 10
+        plot_save_dir: plots
+        seed:
+            grid_search:
+            - 0
+        pde:
+            __call__: theory2practice.pde_utils.ConvectionDiffusion
+            system: convection
+            params:
+                beta: 10
+            source: 0
+            u0:
+                __import__: torch.sin
+        test_grid:
+            __call__: theory2practice.utils.TensorGrid
+            nx: 256
+            nt: 100
+        test_losses:
+        -   __call__: theory2practice.utils.LpLoss
+            p: 1
+        -   __call__: theory2practice.utils.LpLoss
+            p: 2
+            relative: True
+        -   __call__: theory2practice.utils.LpLoss
+            p: infinity
+        wandb:
+            group: test
+            project: t2p_pde_test
+local_dir: results/test
+max_failures: 10
+name: exp
+preprocessors:
+-   __call__: theory2practice.experiments.SetupEnviron
+    environ_update:
+        TUNE_GLOBAL_CHECKPOINT_S: '600'
+        TUNE_MAX_PENDING_TRIALS_PG: '1'
+        TUNE_RESULT_BUFFER_LENGTH: '0'
+        TUNE_WARN_THRESHOLD_S: '2'
+-   __call__: theory2practice.experiments.LogSpecs
+    log_path: results/test
+    spec_dir: specs/test
+resources_per_trial:
+    cpu: 1
+    gpu: 0
+run:
+    __import__: theory2practice.experiments.Trainable
+stop:
+    training_iteration: 1

@@ -487,7 +487,7 @@ class Visualizer:
                     named_fns={
                         row.target_fn: target_fn,
                     },
-                    file=self.save_path / f"target_fns.pdf"
+                    file=self.save_path / "target_fns.pdf"
                     if i == len(target_fn_df) - 1
                     else None,
                     fig=fig,

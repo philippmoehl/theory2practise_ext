@@ -1,43 +1,6 @@
 from abc import ABC, abstractmethod
-import numpy as np
+
 import torch
-
-PDE_PARAMS = {
-    'convection': ['beta'],
-    "diffusion": ['nu'],
-    "reaction": ['rho'],
-    "rd": ['rho', 'nu'],
-}
-
-CONDS = ["x_ic", "t_ic", "x_bc_lb", "t_bc_lb", "x_bc_ub", "t_bc_ub", "x_f", "t_f", "u_ic"]
-
-
-class PdeDataset(torch.utils.data.Dataset):
-    """Pde dataset."""
-
-    def __init__(self):
-        """
-        Args:
-            needed pde components.
-        """
-        pass
-
-    def __len__(self):
-        """Length for this is one, as no batching on these inputs is done."""
-        return 1
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        return 0
-
-
-def create_tensor_grid(nx, nt, x_lb, x_ub, t_min, t_max):
-    """Grid of space, time."""
-    _X = torch.linspace(x_lb, x_ub, steps=nx + 1)
-    _T = torch.linspace(t_min, t_max, steps=nt)
-    return torch.meshgrid(_X, _T, indexing='xy')
 
 
 def grad(u, argument):
@@ -60,11 +23,15 @@ class PDE(ABC):
         pass
 
     @abstractmethod
-    def u0(self, x_grid):
+    def u0(self, nx):
         pass
 
     @abstractmethod
-    def solver(self, _x_star):
+    def u(self, x, t, full_grid):
+        pass
+
+    @abstractmethod
+    def solver(self, full_grid):
         pass
 
     @abstractmethod
@@ -82,20 +49,21 @@ class ConvectionDiffusion(PDE):
     beta: wavespeed coefficient
     """
 
-    def __init__(self, system, _u0, params, source):
+    def __init__(self, system, u0, params, source):
         self.system = system
-        self._u0 = _u0
+        self._u0 = u0
         self.params = params
         self.source = source
 
-        self.device = None
-        self.dtype = None
+        self._device = None
+        self._dtype = None
         self.beta = 0.0
         self.nu = 0.0
 
         self.initialize()
 
     def initialize(self):
+        # params
         if self.system == "convection":
             if "beta" in self.params:
                 self.beta = self.params["beta"]
@@ -108,41 +76,51 @@ class ConvectionDiffusion(PDE):
             )
 
     def u0(self, nx, x_lb=0.0, x_ub=2 * torch.pi):
-        _X = torch.arange(x_lb, x_ub, (x_ub - x_lb) / nx)
-        _X = _X.to(device=self.device, dtype=self.dtype)
+        x_space = torch.arange(x_lb, x_ub, (x_ub - x_lb) / nx)
+        x_space = x_space.to(device=self._device, dtype=self._dtype)
 
-        return self._u0(_X).view(-1, 1)
+        return self._u0(x_space).view(-1, 1)
 
-    def solver(self, _x_star):
+    def u(self, x, t, full_grid):
+        u_full = self.solver(full_grid)
+
+        x_t_ = torch.cat([x, t], dim=1)
+        idx, idx_perm = torch.where((full_grid[:, None] == x_t_).all(dim=-1))
+        # invert index permutation
+        idx_inv = idx[torch.argsort(idx_perm)]
+        return u_full[idx_inv]
+
+    def solver(self, full_grid):
         """Calculate the u solution for convection/diffusion, assuming PBCs.
             Args:
             Returns:
             """
-        stacked_X, stacked_T = torch.unbind(_x_star, dim=1)
-        _X = stacked_X.unique().sort()[0]
+        x_mesh_stacked, t_mesh_stacked = torch.unbind(full_grid, dim=1)
+        x_space = x_mesh_stacked.unique().sort()[0]
 
-        T = stacked_T.view(-1, _X.size(dim=0))
-        uhat0 = torch.fft.fft(self._u0(_X))
-        G = torch.zeros_like(_X) + self.source
-        IKX = j_tensor_grid(_X.size(dim=0))
+        t_mesh = t_mesh_stacked.view(-1, x_space.size(dim=0))
+        uhat0 = torch.fft.fft(self._u0(x_space))
+        g = torch.zeros_like(x_space) + self.source
+        ikx = j_tensor_grid(x_space.size(dim=0))
 
-        nu_factor = torch.exp(self.nu * IKX ** 2 * T - self.beta * IKX * T)
-        A = uhat0 - torch.fft.fft(G) * 0  # at t=0, second term goes away
-        uhat = A * nu_factor + torch.fft.fft(G) * T  # for constant, fft(p) dt = fft(p)*T
+        nu_factor = torch.exp(self.nu * ikx ** 2 * t_mesh - self.beta * ikx * t_mesh)
+        a = uhat0 - torch.fft.fft(g) * 0  # at t=0, second term goes away
+        uhat = a * nu_factor + torch.fft.fft(g) * t_mesh  # for constant, fft(p) dt = fft(p)*T
 
-        u = torch.real(torch.fft.ifft(uhat))
-        u.to(device=self.device, dtype=self.dtype)
+        u_full = torch.real(torch.fft.ifft(uhat))
+        u_full.to(device=self._device, dtype=self._dtype)
 
-        return u.flatten().view(-1, 1)
+        return u_full.flatten().view(-1, 1)
 
     def enforcer(self, u, x, t):
-        G = torch.full_like(u, self.source)
-        return grad(u, t) - self.nu * grad(grad(u, x), x) + self.beta * grad(u, x) - G
+        """u_t - \nu * u_xx + \beta * u_x - G"""
+        g = torch.full_like(u, self.source)
+        return grad(u, t) - self.nu * grad(grad(u, x), x) + self.beta * grad(u, x) - g
 
     def to(self, dtype=None, device=None):
         """Sets the device and dtype."""
-        self.device = device
-        self.dtype = dtype
+        self._device = device
+        self._dtype = dtype
 
 
 class Reaction(PDE):
@@ -150,43 +128,54 @@ class Reaction(PDE):
     rho
     """
 
-    def __init__(self, _u0, params):
-        self._u0 = _u0
+    def __init__(self, u0, params):
+        self._u0 = u0
         self.params = params
 
-        self.device = None
-        self.dtype = None
+        self._device = None
+        self._dtype = None
         self.rho = 0.0
 
         self.initialize()
 
     def initialize(self):
+        # params
         if "rho" in self.params:
             self.rho = self.params["rho"]
 
     def u0(self, nx, x_lb=0.0, x_ub=2 * torch.pi):
-        _X = torch.arange(x_lb, x_ub, (x_ub - x_lb) / nx)
-        _X = _X.to(device=self.device, dtype=self.dtype)
+        x_space = torch.arange(x_lb, x_ub, (x_ub - x_lb) / nx)
+        x_space = x_space.to(device=self._device, dtype=self._dtype)
 
-        return self._u0(_X).view(-1, 1)
+        return self._u0(x_space).view(-1, 1)
 
-    def solver(self, _x_star):
-        stacked_X, stacked_T = torch.unbind(_x_star, dim=1)
-        _X = stacked_X.unique().sort()[0]
-        T = stacked_T.view(-1, _X.size(dim=0))
+    def u(self, x, t, full_grid):
+        u_full = self.solver(full_grid)
 
-        u = reaction(self._u0(_X), self.rho, T)
-        u.to(device=self.device, dtype=self.dtype)
+        x_t_ = torch.cat([x, t], dim=1)
+        idx, idx_perm = torch.where((full_grid[:, None] == x_t_).all(dim=-1))
+        # invert index permutation
+        idx_inv = idx[torch.argsort(idx_perm)]
+        return u_full[idx_inv]
+
+    def solver(self, full_grid):
+        x_mesh_stacked, t_mesh_stacked = torch.unbind(full_grid, dim=1)
+        x_space = x_mesh_stacked.unique().sort()[0]
+        t_mesh = t_mesh_stacked.view(-1, x_space.size(dim=0))
+
+        u = reaction(self._u0(x_space), self.rho, t_mesh)
+        u.to(device=self._device, dtype=self._dtype)
 
         return u.flatten().view(-1, 1)
 
     def enforcer(self, u, x, t):
+        """u_t - \rho * u + \rho * u**2"""
         return grad(u, t) - self.rho * u + self.rho * u ** 2
 
     def to(self, dtype=None, device=None):
         """Sets the device and dtype."""
-        self.device = device
-        self.dtype = dtype
+        self._device = device
+        self._dtype = dtype
 
 
 class ReactionDiffusion(PDE):
@@ -195,65 +184,76 @@ class ReactionDiffusion(PDE):
     rho: reaction coefficient
     """
 
-    def __init__(self, _u0, params):
-        self._u0 = _u0
+    def __init__(self, u0, params):
+        self._u0 = u0
         self.params = params
 
-        self.device = None
-        self.dtype = None
+        self._device = None
+        self._dtype = None
         self.nu = 0.0
         self.rho = 0.0
 
         self.initialize()
 
     def initialize(self):
+        # params
         if "nu" in self.params:
             self.nu = self.params["nu"]
         if "rho" in self.params:
             self.rho = self.params["rho"]
 
     def u0(self, nx, x_lb=0.0, x_ub=2 * torch.pi):
-        _X = torch.arange(x_lb, x_ub, (x_ub - x_lb) / nx)
-        _X = _X.to(device=self.device, dtype=self.dtype)
+        x_space = torch.arange(x_lb, x_ub, (x_ub - x_lb) / nx)
+        x_space = x_space.to(device=self._device, dtype=self._dtype)
 
-        return self._u0(_X).view(-1, 1)
+        return self._u0(x_space).view(-1, 1)
 
-    def solver(self, _x_star):
+    def u(self, x, t, full_grid):
+        u_full = self.solver(full_grid)
+
+        x_t_ = torch.cat([x, t], dim=1)
+        idx, idx_perm = torch.where((full_grid[:, None] == x_t_).all(dim=-1))
+        # invert index permutation
+        idx_inv = idx[torch.argsort(idx_perm)]
+        return u_full[idx_inv]
+
+    def solver(self, full_grid):
         """ Computes the discrete solution of the reaction-diffusion PDE using
                 pseudo-spectral operator splitting.
             Args:
 
             Returns:
             """
-        stacked_X, stacked_T = torch.unbind(_x_star, dim=1)
-        _X = stacked_X.unique().sort()[0]
+        x_mesh_stacked, t_mesh_stacekd = torch.unbind(full_grid, dim=1)
+        x_space = x_mesh_stacked.unique().sort()[0]
 
-        T = stacked_T.view(-1, _X.size(dim=0))
-        u = torch.zeros_like(T.t())
-        dt = 1 / T.size(dim=0)
+        t_mesh = t_mesh_stacekd.view(-1, x_space.size(dim=0))
+        u_full = torch.zeros_like(t_mesh.t())
+        dt = 1 / t_mesh.size(dim=0)
 
-        IKX = j_tensor_grid(_X.size(dim=0))
+        ikx = j_tensor_grid(x_space.size(dim=0))
 
-        u[:, 0] = self._u0(_X)
-        u_ = self._u0(_X)
+        u_full[:, 0] = self._u0(x_space)
+        u_ = self._u0(x_space)
 
-        for i in range(T.size(dim=0) - 1):
+        for i in range(t_mesh.size(dim=0) - 1):
             u_ = reaction(u_, 1, dt)
 
-            u_ = diffusion(u_, 1, dt, IKX ** 2)
-            u[:, i + 1] = u_
+            u_ = diffusion(u_, 1, dt, ikx ** 2)
+            u_full[:, i + 1] = u_
 
-        u.to(device=self.device, dtype=self.dtype)
+        u_full.to(device=self._device, dtype=self._dtype)
 
-        return u.t().flatten().view(-1, 1)
+        return u_full.t().flatten().view(-1, 1)
 
     def enforcer(self, u, x, t):
+        """u_t - \nu * u_xx - \rho * u + \rho * u**2"""
         return grad(u, t) - self.nu * grad(grad(u, x), x) - self.rho * u + self.rho * u ** 2
 
     def to(self, dtype=None, device=None):
         """Sets the device and dtype."""
-        self.device = device
-        self.dtype = dtype
+        self._device = device
+        self._dtype = dtype
 
 
 def reaction(u, rho, dt):
@@ -265,10 +265,10 @@ def reaction(u, rho, dt):
     return u
 
 
-def diffusion(u, nu, dt, IKX2):
+def diffusion(u, nu, dt, ikx2):
     """ du/dt = nu*d2u/dx2
     """
-    factor = torch.exp(nu * IKX2 * dt)
+    factor = torch.exp(nu * ikx2 * dt)
     u_hat = torch.fft.fft(u)
     u_hat *= factor
     u = torch.real(torch.fft.ifft(u_hat))
@@ -276,6 +276,6 @@ def diffusion(u, nu, dt, IKX2):
 
 
 def j_tensor_grid(nx):
-    IKX_pos = 1j * torch.arange(0, nx/2+1, 1)
-    IKX_neg = 1j * torch.arange(-nx/2+1, 0, 1)
-    return torch.cat((IKX_pos, IKX_neg))
+    ikx_pos = 1j * torch.arange(0, nx/2+1, 1)
+    ikx_neg = 1j * torch.arange(-nx/2+1, 0, 1)
+    return torch.cat((ikx_pos, ikx_neg))

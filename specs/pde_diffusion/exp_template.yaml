@@ -8,6 +8,7 @@ config:
         dtype:
             __import__: torch.float
         log_path: results/pde_diffusion
+        n_samples: 0
         plot_save_dir: plots
         plot_x_axis:
             __call__: theory2practice.utils.create_tensor
@@ -42,7 +43,7 @@ config:
             params:
                 nu: 1.0
             source: 0
-            _u0:
+            u0:
                 __import__: torch.sin
         test_grid:
             __call__: theory2practice.utils.TensorGrid
