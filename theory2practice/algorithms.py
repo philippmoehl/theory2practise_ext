@@ -428,6 +428,9 @@ class PinnAlgorithm(Algorithm):
         scheduler_kwargs=None,
         scheduler_step_frequency=1,
         scheduler_step_unit="batch",
+        curr_scheduler_factory=None,
+        curr_scheduler_kwargs=None,
+        curr_scheduler_step_frequency=1,
         eval_keys=None,
     ):
         super().__init__()
@@ -444,6 +447,9 @@ class PinnAlgorithm(Algorithm):
         if scheduler_step_unit not in ("batch", "epoch"):
             raise ValueError("`scheduler_step_unit` must be either `batch` or `epoch`.")
         self._scheduler_step_unit = scheduler_step_unit
+        self._curr_scheduler_factory = curr_scheduler_factory
+        self._curr_scheduler_kwargs = curr_scheduler_kwargs or {}
+        self._curr_scheduler_step_frequency = curr_scheduler_step_frequency
 
         self._epochs_per_iteration = epochs_per_iteration
         self._data_loader_kwargs = data_loader_kwargs
@@ -461,6 +467,7 @@ class PinnAlgorithm(Algorithm):
         self._model = None
         self.optimizer = None
         self.scheduler = None
+        self.curr_scheduler = None
         self._data_loader = None
         self._ic = None
         self._u_ic = None
@@ -502,6 +509,11 @@ class PinnAlgorithm(Algorithm):
             )
             self._save_attrs.append("scheduler")
 
+        if self._curr_scheduler_factory is not None:
+            self.curr_scheduler = self._curr_scheduler_factory(
+                self.pde, **self._curr_scheduler_kwargs
+            )
+
         self._x_f, self._t_f = self.grid.sample(self.n_f)
         self._x_f.requires_grad_()
         self._t_f.requires_grad_()
@@ -518,6 +530,23 @@ class PinnAlgorithm(Algorithm):
         )
 
         self._initialized = True
+
+    def reinitialize(self):
+        """Curriculum Learning."""
+        self._x_f, self._t_f = self.grid.sample(self.n_f)
+        self._x_f.requires_grad_()
+        self._t_f.requires_grad_()
+
+        self._x, self._t = self.grid.sample(self.n_samples)
+        self._u = self.pde.u(self._x, self._t, self.grid.full_grid())
+
+        dataset = torch.utils.data.TensorDataset(self._x, self._t, self._u)
+
+        self._data_loader = torch.utils.data.DataLoader(
+            dataset, **self._data_loader_kwargs
+        )
+
+        utils.determinism(0)
 
     @property
     def samples(self):
@@ -545,7 +574,7 @@ class PinnAlgorithm(Algorithm):
             raise RuntimeError("Not initialized!")
 
         self._model.train()
-        for _ in range(self._epochs_per_iteration):
+        for j in range(self._epochs_per_iteration):
             self.metrics.zero()
 
             # data input
@@ -572,6 +601,7 @@ class PinnAlgorithm(Algorithm):
                         }
                         loss = self._loss(prediction=predictions, y=y, store=False)
                         loss.backward()
+
                         return loss
 
                     orig_closure_loss = self.optimizer.step(closure=closure)
@@ -605,6 +635,7 @@ class PinnAlgorithm(Algorithm):
                     }
                     loss = self._loss(prediction=predictions, y=y, store=False)
                     loss.backward()
+
                     return loss
 
                 orig_closure_loss = self.optimizer.step(closure=closure)
@@ -627,6 +658,13 @@ class PinnAlgorithm(Algorithm):
                 and self.metrics.epoch % self._scheduler_step_frequency == 0
             ):
                 self.scheduler.step()
+
+            if (
+                self.curr_scheduler is not None
+                and self.metrics.epoch % self._curr_scheduler_step_frequency == 0
+            ):
+                self.curr_scheduler.step()
+                self.reinitialize()
 
         summary["lr"] = self.optimizer.param_groups[0]["lr"]
         return summary

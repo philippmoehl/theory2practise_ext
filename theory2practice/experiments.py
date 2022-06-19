@@ -171,7 +171,7 @@ TrainablePdeConfig = namedtuple(
         "dtype",
         "seed",
     ],
-    defaults=(None, None, None, None, "plots", "cuda", torch.float, None),
+    defaults=(None, None, None, None, None, "plots", "cuda", torch.float, None),
 )
 
 
@@ -254,7 +254,7 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
                     self.metrics(prediction=self.algorithm.model(x), y=self.target_fn(x))
             if hasattr(self, "test_grid"):
                 full_grid = self.test_grid.full_grid()
-                self.metrics(prediction=self.algorithm.model(full_grid), y=self.pde.solver(full_grid))
+                self.metrics(prediction=self.algorithm.model(full_grid), y=self.algorithm.pde.solver(full_grid))
         return self.metrics.finalize()
 
     def _step(self, train=True):
@@ -288,7 +288,7 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
                 plot_grid=self._plot_grid,
                 plot_x_axis=self._plot_x_axis,
                 plot_t_axis=self._plot_t_axis,
-                pde=self.pde.solver,
+                pde=self.algorithm.pde.solver,
                 model=self.algorithm.model,
                 samples=self.algorithm.samples,
                 file=file,
@@ -304,6 +304,7 @@ class Trainable(WandbTrainableMixin, ray.tune.Trainable):
         wandb.log(results)
         results.pop("visualization", None)
         results.pop("iteration")
+
         return results
 
     def step(self):

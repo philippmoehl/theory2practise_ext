@@ -567,6 +567,7 @@ class PinnLoss(Loss):
             if loss_data is not None:
                 loss_full += torch.sum(loss_data)
         else:
+            # TODO: logging instead of prints
             print("loss_style not implemented yet, falling back to default.")
             return torch.mean(loss_ic) + torch.mean(loss_bc) + self.loss_factor * torch.mean(loss_f)
 
@@ -750,9 +751,9 @@ def visualize_pde(
                 go.Heatmap(
                     x=plot_t_axis.to("cpu").squeeze(),
                     y=plot_x_axis.to("cpu").squeeze(),
-                    z=torch.abs(pde(plot_grid) - model(plot_grid)).to("cpu").squeeze().view(nt, nx).t(),
+                    z=torch.abs(model(plot_grid) - pde(plot_grid)).to("cpu").squeeze().view(nt, nx).t(),
                     name="heatmap",
-                    colorscale="greys",
+                    colorscale="rainbow",
                     zsmooth="best"
                 )
             )

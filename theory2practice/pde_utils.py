@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import numpy as np
 
 import torch
 
@@ -279,3 +280,107 @@ def j_tensor_grid(nx):
     ikx_pos = 1j * torch.arange(0, nx/2+1, 1)
     ikx_neg = 1j * torch.arange(-nx/2+1, 0, 1)
     return torch.cat((ikx_pos, ikx_neg))
+
+
+class CurriculumScheduler:
+    def __init__(self, pde, params, warmup_factor=0., start_factor=0., end_factor=1.0, warmup_iters=0, total_iters=0,
+                 last_step=-1, verbose=False):
+
+        if not isinstance(pde, PDE):
+            raise TypeError(f'{type(pde).__name__} is not a PDE')
+        self.pde = pde
+
+        # TODO: param specific warmup and factors
+        if not isinstance(params, list) and not isinstance(params, tuple):
+            self.params = [params]
+        else:
+            # TODO: restructure PDE base class to have property "params"
+            if not 0 < len(params) <= len(self.pde.params):
+                raise ValueError(f"Expected at least 1 and at most {len(self.pde.params)} parameters, "
+                                 f"but got {len(params)}")
+            self.params = list(params)
+
+        # Initialize epoch and base parameters
+        if last_step == -1:
+            for param in self.params:
+                if not hasattr(pde, param):
+                    raise KeyError(f"param {self.params} is not specified "
+                                   f"in PDE {pde}")
+                setattr(pde, f'initial_{param}', getattr(pde, param))
+        else:
+            for param in self.params:
+                if not hasattr(pde, f"initial_{param}"):
+                    raise KeyError(f"param initial_{param} is not specified "
+                                   f"in PDE {pde} when resuming training")
+        self.base_params = [getattr(pde, f"initial_{param}") for param in params]
+        self.last_step = last_step
+
+        # rates and steps
+        if start_factor > 1.0 or start_factor < 0:
+            raise ValueError(f"Starting multiplicative factor expected to be between 0 and 1, "
+                             f"but got {start_factor}")
+
+        if end_factor > 1.0 or end_factor < 0:
+            raise ValueError(f"Ending multiplicative factor expected to be between 0 and 1, "
+                             f"but got {end_factor}")
+
+        # warmup rates and steps
+        if warmup_iters > total_iters:
+            raise ValueError(f"warmup iterations expected to be below total iterations {total_iters}, "
+                             f"but got {warmup_iters}")
+
+        if warmup_iters > 0:
+            if warmup_factor > max(start_factor, end_factor) or warmup_factor < min(start_factor, end_factor):
+                raise ValueError(f"Warmup multiplicative factor expected to be between starting factor "
+                                 f"{start_factor} and ending factor {end_factor}, "
+                                 f"but got {warmup_factor}")
+
+        self.start_factor = start_factor
+        self.end_factor = end_factor
+        self.total_iters = total_iters
+
+        self.warmup_iters = warmup_iters
+        self.warmup_factor = warmup_factor if (warmup_iters > 0) else start_factor
+
+        self.verbose = verbose
+        self._last_params = self.base_params
+
+        self.step()
+
+    def get_last_params(self):
+        return self._last_params
+
+    def get_params(self):
+
+        if self.last_step == 0:
+            return [base_param * self.start_factor
+                    for base_param in self.base_params]
+
+        if self.last_step > self.total_iters:
+            return self.base_params
+
+        if self.last_step <= self.warmup_iters:
+            return [base_param * (self.start_factor + self.last_step *
+                    (self.warmup_factor - self.start_factor) / self.warmup_iters )
+                    for base_param in self.base_params]
+
+        return [base_param * (self.warmup_factor + (self.last_step - self.warmup_iters) *
+                (self.end_factor - self.warmup_factor)/(self.total_iters - self.warmup_iters))
+                for base_param in self.base_params]
+
+    @staticmethod
+    def print_params(is_verbose, param, value):
+        if is_verbose:
+            # TODO: logging info level instead, if verbose
+            print(f"Adjusting parameter"
+                  f" {param} to {value:.2f}.")
+
+    def step(self):
+        self.last_step += 1
+        values = self.get_params()
+
+        for param, value in zip(self.params, values):
+            setattr(self.pde, param, value)
+            self.print_params(self.verbose, param, value)
+
+        self._last_params = [getattr(self.pde, param) for param in self.params]

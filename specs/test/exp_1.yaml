@@ -36,18 +36,55 @@ config:
                 __import__: torch.optim.LBFGS
             optimizer_kwargs:
                 lr: 1
-                max_iter: 100000
+                max_iter: 1000000
                 max_eval: null
                 history_size: 50
                 tolerance_grad: 1.0e-7
                 tolerance_change: 1.0e-7
                 line_search_fn: strong_wolfe
+            curr_scheduler_factory:
+                __import__: theory2practice.pde_utils.CurriculumScheduler
+            curr_scheduler_kwargs:
+                params:
+                - beta
+                warmup_factor:
+                    eval: 1/10
+                start_factor: 0.
+                end_factor: 1.0
+                warmup_iters: 2
+                total_iters: 11
+                verbose: true
+            curr_scheduler_step_frequency: 1
         dim: 1
         dtype:
             __import__: torch.float
         log_path: results/test
-        n_samples: 10
+        n_samples: 0
         plot_save_dir: plots
+        plot_x_axis:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.arange
+            # TODO: hydra to deal with in-yaml computations: 2 * torch.sin
+            end: 6.283185307179586
+            start: 0.0
+            step: 0.02454369260617026
+        plot_t_axis:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.linspace
+            end: 1
+            start: 0
+            steps: 100
+        plot_grid:
+            __call__: theory2practice.utils.create_tensor
+            creation_op:
+                __import__: torch.cartesian_prod
+            __args__:
+                - eval: spec.config.plot_t_axis
+                - eval: spec.config.plot_x_axis
+            methods:
+                - name: fliplr
         seed:
             grid_search:
             - 0
@@ -55,7 +92,7 @@ config:
             __call__: theory2practice.pde_utils.ConvectionDiffusion
             system: convection
             params:
-                beta: 10
+                beta: 20
             source: 0
             u0:
                 __import__: torch.sin
@@ -93,4 +130,4 @@ resources_per_trial:
 run:
     __import__: theory2practice.experiments.Trainable
 stop:
-    training_iteration: 1
+    training_iteration: 11
