@@ -120,7 +120,8 @@ class FeedForward(nn.Module):
             self.arch = [input_dim] + (depth - 1) * [width] + [output_dim]
         if self.arch is None:
             raise ValueError(
-                "Either an architecture `arch` or `depth`, `width`, `input_dim`, and `output_dim` need to be chosen!"
+                "Either an architecture `arch` or `depth`, `width`, "
+                "`input_dim`, and `output_dim` need to be chosen!"
             )
 
         # affine linear layer
@@ -168,7 +169,8 @@ class FeedForward(nn.Module):
 
         if residual_connections is True:
             self.residual_connections = list(range(1, len(self.arch) - 2))
-        elif any(self.arch[i] != self.arch[i + 1] for i in self.residual_connections):
+        elif any(self.arch[i] != self.arch[i + 1]
+                 for i in self.residual_connections):
             raise ValueError("Residual connections require the same dimension.")
 
     def forward(self, x):
@@ -277,7 +279,8 @@ class GdAlgorithm(Algorithm):
         self._scheduler_kwargs = scheduler_kwargs or {}
         self._scheduler_step_frequency = scheduler_step_frequency
         if scheduler_step_unit not in ("batch", "epoch"):
-            raise ValueError("`scheduler_step_unit` must be either `batch` or `epoch`.")
+            raise ValueError(
+                "`scheduler_step_unit` must be either `batch` or `epoch`.")
         self._scheduler_step_unit = scheduler_step_unit
 
         self._epochs_per_iteration = epochs_per_iteration
@@ -380,7 +383,8 @@ class GdAlgorithm(Algorithm):
 
                 def closure():
                     self.optimizer.zero_grad()
-                    loss = self._loss(prediction=self._model(x), y=y, store=False)
+                    loss = self._loss(prediction=self._model(x), y=y,
+                                      store=False)
                     loss.backward()
                     return loss
 
@@ -431,6 +435,9 @@ class PinnAlgorithm(Algorithm):
         curr_scheduler_factory=None,
         curr_scheduler_kwargs=None,
         curr_scheduler_step_frequency=1,
+        grid_scheduler_factory=None,
+        grid_scheduler_kwargs=None,
+        grid_scheduler_step_frequency=1,
         eval_keys=None,
     ):
         super().__init__()
@@ -445,11 +452,15 @@ class PinnAlgorithm(Algorithm):
         self._scheduler_kwargs = scheduler_kwargs or {}
         self._scheduler_step_frequency = scheduler_step_frequency
         if scheduler_step_unit not in ("batch", "epoch"):
-            raise ValueError("`scheduler_step_unit` must be either `batch` or `epoch`.")
+            raise ValueError(
+                "`scheduler_step_unit` must be either `batch` or `epoch`.")
         self._scheduler_step_unit = scheduler_step_unit
         self._curr_scheduler_factory = curr_scheduler_factory
         self._curr_scheduler_kwargs = curr_scheduler_kwargs or {}
         self._curr_scheduler_step_frequency = curr_scheduler_step_frequency
+        self._grid_scheduler_factory = grid_scheduler_factory
+        self._grid_scheduler_kwargs = grid_scheduler_kwargs or {}
+        self._grid_scheduler_step_frequency = grid_scheduler_step_frequency
 
         self._epochs_per_iteration = epochs_per_iteration
         self._data_loader_kwargs = data_loader_kwargs
@@ -468,6 +479,8 @@ class PinnAlgorithm(Algorithm):
         self.optimizer = None
         self.scheduler = None
         self.curr_scheduler = None
+        self.grid_scheduler = None
+        self.grid_state_dict = None
         self._data_loader = None
         self._ic = None
         self._u_ic = None
@@ -499,6 +512,7 @@ class PinnAlgorithm(Algorithm):
         self._model = utils.distribute(
             self.raw_model, device=self._device, dtype=self._dtype
         )
+
         self.optimizer = self._optimizer_factory(
             self._model.parameters(), **self._optimizer_kwargs
         )
@@ -514,14 +528,29 @@ class PinnAlgorithm(Algorithm):
                 self.pde, **self._curr_scheduler_kwargs
             )
 
+        if self._grid_scheduler_factory is not None:
+            self.grid_scheduler = self._grid_scheduler_factory(
+                self.grid, **self._grid_scheduler_kwargs
+            )
+            self.grid_state_dict = self._model.state_dict()
+
+        if self.curr_scheduler is not None and self.grid_scheduler is not None:
+            raise ValueError(f"at this moment only one scheduler of "
+                             f"{type(self.curr_scheduler).__name__} and "
+                             f"{type(self.grid_scheduler).__name__} is allowed")
+
         self._x_f, self._t_f = self.grid.sample(self.n_f)
         self._x_f.requires_grad_()
         self._t_f.requires_grad_()
         self._ic, self._bc_lb, self._bc_ub = self.grid.conds()
-        self._u_ic = self.pde.u0(self.grid.nx, self.grid.x_lb, self.grid.x_ub)
+        self._u_ic = self.pde.u0(self._ic[:, 0])
 
         self._x, self._t = self.grid.sample(self.n_samples)
-        self._u = self.pde.u(self._x, self._t, self.grid.full_grid())
+        if hasattr(self.grid, "initial_full_grid"):
+            self._u = self.pde.u(self._x, self._t,
+                                 self.grid.initial_full_grid)
+        else:
+            self._u = self.pde.u(self._x, self._t, self.grid.full_grid())
 
         dataset = torch.utils.data.TensorDataset(self._x, self._t, self._u)
 
@@ -532,13 +561,19 @@ class PinnAlgorithm(Algorithm):
         self._initialized = True
 
     def reinitialize(self):
-        """Curriculum Learning."""
+        """Curriculum learning and grid splitting."""
         self._x_f, self._t_f = self.grid.sample(self.n_f)
         self._x_f.requires_grad_()
         self._t_f.requires_grad_()
+        self._ic, self._bc_lb, self._bc_ub = self.grid.conds()
+        self._u_ic = self._model(self._ic).detach()
 
         self._x, self._t = self.grid.sample(self.n_samples)
-        self._u = self.pde.u(self._x, self._t, self.grid.full_grid())
+        if hasattr(self.grid, "initial_full_grid"):
+            self._u = self.pde.u(self._x, self._t,
+                                 self.grid.initial_full_grid)
+        else:
+            self._u = self.pde.u(self._x, self._t, self.grid.full_grid())
 
         dataset = torch.utils.data.TensorDataset(self._x, self._t, self._u)
 
@@ -546,7 +581,7 @@ class PinnAlgorithm(Algorithm):
             dataset, **self._data_loader_kwargs
         )
 
-        utils.determinism(0)
+        # utils.determinism(0)
 
     @property
     def samples(self):
@@ -574,7 +609,7 @@ class PinnAlgorithm(Algorithm):
             raise RuntimeError("Not initialized!")
 
         self._model.train()
-        for j in range(self._epochs_per_iteration):
+        for _ in range(self._epochs_per_iteration):
             self.metrics.zero()
 
             # data input
@@ -585,8 +620,10 @@ class PinnAlgorithm(Algorithm):
                     def closure():
                         self.optimizer.zero_grad()
                         # enforce
-                        u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
-                        f_pred = self.pde.enforcer(u_pred_f, self._x_f, self._t_f)
+                        u_pred_f = self._model(
+                            torch.cat([self._x_f, self._t_f], dim=1))
+                        f_pred = self.pde.enforcer(
+                            u_pred_f, self._x_f, self._t_f)
 
                         predictions = {
                             "u_pred": self._model(torch.cat([x, t], dim=1)),
@@ -599,7 +636,8 @@ class PinnAlgorithm(Algorithm):
                             "u": u,
                             "u_ic": self._u_ic,
                         }
-                        loss = self._loss(prediction=predictions, y=y, store=False)
+                        loss = self._loss(prediction=predictions, y=y,
+                                          store=False)
                         loss.backward()
 
                         return loss
@@ -610,9 +648,9 @@ class PinnAlgorithm(Algorithm):
                     self.metrics.step += 1
 
                     if (
-                        self.scheduler is not None
-                        and self._scheduler_step_unit == "batch"
-                        and self.metrics.step % self._scheduler_step_frequency == 0
+                        self.scheduler is not None and
+                        self._scheduler_step_unit == "batch" and
+                        self.metrics.step % self._scheduler_step_frequency == 0
                     ):
                         self.scheduler.step()
 
@@ -621,7 +659,8 @@ class PinnAlgorithm(Algorithm):
                 def closure():
                     self.optimizer.zero_grad()
                     # enforce
-                    u_pred_f = self._model(torch.cat([self._x_f, self._t_f], dim=1))
+                    u_pred_f = self._model(
+                        torch.cat([self._x_f, self._t_f], dim=1))
                     f_pred = self.pde.enforcer(u_pred_f, self._x_f, self._t_f)
 
                     predictions = {
@@ -644,27 +683,42 @@ class PinnAlgorithm(Algorithm):
                 self.metrics.step += 1
 
                 if (
-                        self.scheduler is not None
-                        and self._scheduler_step_unit == "batch"
-                        and self.metrics.step % self._scheduler_step_frequency == 0
+                    self.scheduler is not None and
+                    self._scheduler_step_unit == "batch" and
+                    self.metrics.step % self._scheduler_step_frequency == 0
                 ):
+
                     self.scheduler.step()
 
             summary = self.metrics.finalize()
 
             if (
-                self.scheduler is not None
-                and self._scheduler_step_unit == "epoch"
-                and self.metrics.epoch % self._scheduler_step_frequency == 0
+                self.scheduler is not None and
+                self._scheduler_step_unit == "epoch" and
+                self.metrics.epoch % self._scheduler_step_frequency == 0
             ):
                 self.scheduler.step()
 
             if (
-                self.curr_scheduler is not None
-                and self.metrics.epoch % self._curr_scheduler_step_frequency == 0
+                self.curr_scheduler is not None and
+                self.metrics.epoch % self._curr_scheduler_step_frequency == 0
             ):
                 self.curr_scheduler.step()
                 self.reinitialize()
+
+            if (
+                self.grid_scheduler is not None and
+                self.metrics.epoch % self._grid_scheduler_step_frequency == 0
+            ):
+                self.grid_scheduler.step()
+                self.reinitialize()
+                self._model.load_state_dict(self.grid_state_dict)
+                # TODO: make sure LR schedulers will be reset here as well
+                #  (step count = 0)
+
+                # TODO: plot grid must be the splitting -->
+                #  by: if girdscheduler not None of pde -> apply each
+                #  training_iteration
 
         summary["lr"] = self.optimizer.param_groups[0]["lr"]
         return summary

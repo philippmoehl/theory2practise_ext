@@ -18,6 +18,7 @@ https://arxiv.org/abs/2109.01050)
    * reaction-diffusion
 * curriculum learning for PDEs
    * parameter w/ or w/o warmup, linear increasing towards harder PDEs
+* sequential grid learning for PDEs
   
 ## Install
 

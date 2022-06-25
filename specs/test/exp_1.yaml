@@ -10,7 +10,7 @@ config:
                     eval: int(np.maximum(spec.config.n_samples, 1))
                 shuffle: false
             grid:
-                __call__: theory2practice.utils.TensorGrid
+                __call__: theory2practice.pde_utils.TensorGrid
                 nx:
                     grid_search:
                     - 256
@@ -42,64 +42,39 @@ config:
                 tolerance_grad: 1.0e-7
                 tolerance_change: 1.0e-7
                 line_search_fn: strong_wolfe
-            curr_scheduler_factory:
-                __import__: theory2practice.pde_utils.CurriculumScheduler
-            curr_scheduler_kwargs:
-                params:
-                - beta
-                warmup_factor:
-                    eval: 1/10
-                start_factor: 0.
-                end_factor: 1.0
-                warmup_iters: 2
-                total_iters: 11
-                verbose: true
-            curr_scheduler_step_frequency: 1
+            # grid_scheduler_factory:
+            #     __import__: theory2practice.pde_utils.GridScheduler
+            # grid_scheduler_kwargs:
+            #     splits: 10
+            #     verbose: true
+            # grid_scheduler_step_frequency: 1
+            # curr_scheduler_factory:
+            #     __import__: theory2practice.pde_utils.CurriculumScheduler
+            # curr_scheduler_kwargs:
+            #     params:
+            #     - beta
+            #     warmup_factor: 0.05
+            #     warmup_iters: 3
+            #     total_iters: 20
+            #     verbose: true
         dim: 1
         dtype:
             __import__: torch.float
         log_path: results/test
         n_samples: 0
         plot_save_dir: plots
-        plot_x_axis:
-            __call__: theory2practice.utils.create_tensor
-            creation_op:
-                __import__: torch.arange
-            # TODO: hydra to deal with in-yaml computations: 2 * torch.sin
-            end: 6.283185307179586
-            start: 0.0
-            step: 0.02454369260617026
-        plot_t_axis:
-            __call__: theory2practice.utils.create_tensor
-            creation_op:
-                __import__: torch.linspace
-            end: 1
-            start: 0
-            steps: 100
-        plot_grid:
-            __call__: theory2practice.utils.create_tensor
-            creation_op:
-                __import__: torch.cartesian_prod
-            __args__:
-                - eval: spec.config.plot_t_axis
-                - eval: spec.config.plot_x_axis
-            methods:
-                - name: fliplr
+        plot_grid: true
         seed:
             grid_search:
             - 0
         pde:
             __call__: theory2practice.pde_utils.ConvectionDiffusion
-            system: convection
             params:
-                beta: 20
-            source: 0
+                beta: 1
             u0:
                 __import__: torch.sin
-        test_grid:
-            __call__: theory2practice.utils.TensorGrid
-            nx: 256
-            nt: 100
+            system: convection
+            source: 0
         test_losses:
         -   __call__: theory2practice.utils.LpLoss
             p: 1
@@ -128,6 +103,6 @@ resources_per_trial:
     cpu: 1
     gpu: 0
 run:
-    __import__: theory2practice.experiments.Trainable
+    __import__: theory2practice.experiments.Trainable2
 stop:
-    training_iteration: 11
+    training_iteration: 1

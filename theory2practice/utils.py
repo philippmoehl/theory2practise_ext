@@ -95,7 +95,8 @@ def nested_pop(obj, string, default=_NO_DEFAULT, sep="/"):
     field = substrings[-1]
     try:
         if len(substrings) > 1:
-            obj = nested_get(obj, sep.join(substrings[:-1]), default=default, sep=sep)
+            obj = nested_get(obj, sep.join(substrings[:-1]),
+                             default=default, sep=sep)
         if issequenceform(obj):
             return obj.pop(int(field))
         elif isinstance(obj, collections.abc.Mapping):
@@ -153,7 +154,8 @@ def import_string(string):
         return getattr(module, class_name)
     except AttributeError as err:
         raise ImportError(
-            f"Module `{module_path}` does not define a `{class_name}` attribute/class."
+            f"Module `{module_path}` does not define a `{class_name}` "
+            f"attribute/class."
         ) from err
 
 
@@ -212,7 +214,9 @@ def deserialize_spec(spec):
                 else:
                     cls_args = []
                 cls_kwargs = {
-                    k: deserialize_spec(v) for k, v in spec.items() if k not in [CALL_KEY, ARGS_KEY]
+                    k: deserialize_spec(v)
+                    for k, v in spec.items()
+                    if k not in [CALL_KEY, ARGS_KEY]
                 }
                 return cls_ptr(*cls_args, **cls_kwargs)
             elif key == ENVIRON_KEY:
@@ -222,13 +226,15 @@ def deserialize_spec(spec):
                 update = {k: v for k, v in spec.items() if not k == FILE_KEY}
                 return load_spec(spec[key], update=update, deserialize=True)
             if not len(spec) == 1:
-                raise ValueError(f"Cannot deserialize spec `{spec}` with arguments!")
+                raise ValueError(f"Cannot deserialize spec `{spec}` "
+                                 f"with arguments!")
             if key == SPEC_KEY:
                 return spec[key]
             return import_string(spec[key])
         else:
             raise ValueError(
-                f"Invalid spec, multiple deserialization methods `{keys}` are given."
+                f"Invalid spec, multiple deserialization methods `{keys}` "
+                f"are given."
             )
     else:
         return spec
@@ -288,7 +294,8 @@ def create_tensor(*args, data=None, creation_op=None, methods=None, **kwargs):
     Utility function to create torch tensors.
     """
     if (data is None) is (creation_op is None):
-        raise ValueError("Either `data` or `creation_op` needs to be specified!")
+        raise ValueError("Either `data` or `creation_op` "
+                         "needs to be specified!")
     if data is not None:
         tensor = torch.tensor(data, *args, **kwargs)
     else:
@@ -301,11 +308,11 @@ def create_tensor(*args, data=None, creation_op=None, methods=None, **kwargs):
     return tensor
 
 
-def create_tensor_grid(nx, nt, x_lb, x_ub, t_min, t_max):
+def create_tensor_spaces(nx, nt, x_lb, x_ub, t_min, t_max):
     """Grid of space, time."""
-    x_space = torch.linspace(x_lb, x_ub, steps=nx + 1)
-    t_space = torch.linspace(t_min, t_max, steps=nt)
-    return torch.meshgrid(x_space, t_space, indexing="xy")
+    x_space = torch.linspace(x_lb, x_ub, steps=nx+1)
+    t_space = torch.linspace(t_min, t_max, steps=nt+1)
+    return x_space, t_space
 
 
 class TensorGrid:
@@ -313,7 +320,7 @@ class TensorGrid:
     Grid data preprocessor.
     """
 
-    def __init__(self, nx, nt, x_lb=0.0, x_ub=2 * torch.pi, t_min=0.0, t_max=1.0):
+    def __init__(self, nx, nt, x_lb=0., x_ub=2*torch.pi, t_min=0., t_max=1.):
         self.nx = nx
         self.nt = nt
         self.x_lb = x_lb
@@ -321,8 +328,51 @@ class TensorGrid:
         self.t_min = t_min
         self.t_max = t_max
 
-        self._x_mesh, self._t_mesh = create_tensor_grid(nx, nt, self.x_lb, self.x_ub,
-                                                      self.t_min, self.t_max)
+        self._x_space = None
+        self._t_space = None
+        self._x_mesh = None
+        self._t_mesh = None
+        self._device = None
+        self._dtype = None
+
+        self.initialize()
+
+    def initialize(self):
+        self._x_space, self._t_space = create_tensor_spaces(
+            self.nx, self.nt, self.x_lb, self.x_ub, self.t_min, self.t_max)
+        self._x_mesh, self._t_mesh = torch.meshgrid(
+            self._x_space, self._t_space, indexing="xy")
+
+    def split_mesh(self, mesh, n_split, splits=10):
+        if mesh == "x_mesh":
+            if n_split == 0:
+                if self.nx % splits != 0:
+                    raise ValueError(f"expected length of x {self.nx}, be "
+                                     f"multiple of number of splits {splits}")
+                self.nx = int(self.nx/splits)
+
+            split_range = (self.x_ub - self.x_lb) / splits
+
+            self._x_space, self._t_space = create_tensor_spaces(
+                self.nx, self.nt, split_range*n_split, split_range*(n_split+1),
+                self.t_min, self.t_max)
+            self._x_mesh, self._t_mesh = torch.meshgrid(
+                self._x_space, self._t_space, indexing="xy")
+
+        if mesh == "t_mesh":
+            if n_split == 0:
+                if self.nt % splits != 0:
+                    raise ValueError(f"expected length of t {self.nt}-1, be "
+                                     f"multiple of number of splits {splits}")
+                self.nt = int(self.nt/splits)
+
+            split_range = (self.t_max - self.t_min) / splits
+
+            self._x_space, self._t_space = create_tensor_spaces(
+                self.nx, self.nt, self.x_lb, self.x_ub, split_range*n_split,
+                split_range*(n_split+1))
+            self._x_mesh, self._t_mesh = torch.meshgrid(
+                self._x_space, self._t_space, indexing="xy")
 
     def sample(self, n_samples):
         """No_initial_no_boundary, requires_grad for enforcing pde."""
@@ -331,15 +381,25 @@ class TensorGrid:
 
         idx = torch.randperm(x_inner_mesh.size()[0])[:n_samples]
 
-        return x_inner_mesh[idx], t_inner_mesh[idx]
+        x_mesh_sample = x_inner_mesh[idx].to(device=self._device,
+                                             dtype=self._dtype)
+        t_mesh_sample = t_inner_mesh[idx].to(device=self._device,
+                                             dtype=self._dtype)
+
+        return x_mesh_sample, t_mesh_sample
 
     def conds(self):
         # initial condition, from x = [-end, +end] and t=0
-        ic = torch.cat([self._x_mesh[:1, :-1].t(), self._t_mesh[:1, :-1].t()], dim=1)
+        ic = torch.cat([self._x_mesh[:1, :-1].t(), self._t_mesh[:1, :-1].t()],
+                       dim=1)
         # boundary condition at x = 0, and t = [0, 1]
         bc_lb = torch.cat([self._x_mesh[:, :1], self._t_mesh[:, :1]], dim=1)
         # at x = end
         bc_ub = torch.cat([self._x_mesh[:, -1:], self._t_mesh[:, -1:]], dim=1)
+
+        ic = ic.to(device=self._device, dtype=self._dtype)
+        bc_lb = bc_lb.to(device=self._device, dtype=self._dtype)
+        bc_ub = bc_ub.to(device=self._device, dtype=self._dtype)
 
         return ic, bc_lb, bc_ub
 
@@ -348,12 +408,31 @@ class TensorGrid:
             self._x_mesh[:, :-1].flatten().view(-1, 1),
             self._t_mesh[:, :-1].flatten().view(-1, 1)
         ], dim=1)
+
+        full_grid = full_grid.to(device=self._device, dtype=self._dtype)
+
         return full_grid
+
+    @property
+    def x_axis(self):
+        return self._x_space[:-1]
+
+    @property
+    def t_axis(self):
+        return self._t_space
+
+    @property
+    def x_mesh(self):
+        return self._x_mesh, self.nx
+
+    @property
+    def t_mesh(self):
+        return self._t_mesh, self.nt
 
     def to(self, dtype, device):
         """Sets the device and dtype."""
-        self._x_mesh.to(device=device, dtype=dtype)
-        self._t_mesh.to(device=device, dtype=dtype)
+        self._device = device
+        self._dtype = dtype
 
 
 class DistributionWrapper(torch.nn.Module):
@@ -419,7 +498,7 @@ class LpLoss(Loss):
     (Relative) Lp losses.
     """
 
-    def __init__(self, p=1.0, relative=False, eps=1.0, final_inverse_power=True):
+    def __init__(self, p=1., relative=False, eps=1., final_inverse_power=True):
 
         if not (p == "infinity" or (isinstance(p, (float, int)) and p > 0)):
             raise ValueError("p can either be a positive number or `infinity`.")
@@ -506,7 +585,8 @@ class PinnLoss(Loss):
     Pinn losses.
     """
 
-    def __init__(self, loss_factor=1.0, loss_style="mean", eps=1.0, relative=False, data=False):
+    def __init__(self, loss_factor=1., loss_style="mean", eps=1.,
+                 relative=False, data=False):
 
         if loss_style not in ["mean", "sum"]:
             raise ValueError("loss_style can either be a `mean` or `sum`.")
@@ -559,17 +639,24 @@ class PinnLoss(Loss):
         loss_f = f_pred ** 2
 
         if self.loss_style == "mean":
-            loss_full = torch.mean(loss_ic) + torch.mean(loss_bc) + self.loss_factor * torch.mean(loss_f)
+            loss_conds = torch.mean(loss_ic) + torch.mean(loss_bc)
+            loss_enforce = self.loss_factor * torch.mean(loss_f)
+            loss_full = loss_conds + loss_enforce
             if loss_data is not None:
                 loss_full += torch.mean(loss_data)
         elif self.loss_style == "sum":
-            loss_full = torch.sum(loss_ic) + torch.sum(loss_bc) + self.loss_factor * torch.sum(loss_f)
+            loss_conds = torch.sum(loss_ic) + torch.sum(loss_bc)
+            loss_enforce = self.loss_factor * torch.sum(loss_f)
+            loss_full = loss_conds + loss_enforce
             if loss_data is not None:
                 loss_full += torch.sum(loss_data)
         else:
-            # TODO: logging instead of prints
             print("loss_style not implemented yet, falling back to default.")
-            return torch.mean(loss_ic) + torch.mean(loss_bc) + self.loss_factor * torch.mean(loss_f)
+            loss_conds = torch.mean(loss_ic) + torch.mean(loss_bc)
+            loss_enforce = self.loss_factor * torch.mean(loss_f)
+            loss_full = loss_conds + loss_enforce
+            if loss_data is not None:
+                loss_full += torch.mean(loss_data)
 
         return loss_full
 
@@ -650,7 +737,8 @@ class Metrics:
         self.runtime += time.time() - self._t
         self.epoch += 1
         result = {loss.name: loss.finalize() for loss in self.losses}
-        result.update({"time": self.runtime, "step": self.step, "epoch": self.epoch})
+        result.update({"time": self.runtime, "step": self.step,
+                       "epoch": self.epoch})
         return result
 
     def state_dict(self):
@@ -738,6 +826,7 @@ def visualize_pde(
     """
     nx = plot_x_axis.size(dim=0)
     nt = plot_t_axis.size(dim=0)
+    x, t = plot_grid.unbind(1)
 
     if fig is None:
         fig = go.Figure()
@@ -747,11 +836,12 @@ def visualize_pde(
             if isinstance(model, torch.nn.Module):
                 model.eval()
 
+            diff = pde(x.view(-1, 1), t.view(-1, 1)) - model(plot_grid)
             fig.add_trace(
                 go.Heatmap(
                     x=plot_t_axis.to("cpu").squeeze(),
                     y=plot_x_axis.to("cpu").squeeze(),
-                    z=torch.abs(model(plot_grid) - pde(plot_grid)).to("cpu").squeeze().view(nt, nx).t(),
+                    z=torch.abs(diff).to("cpu").squeeze().view(nt, nx).t(),
                     name="heatmap",
                     colorscale="rainbow",
                     zsmooth="best"
@@ -795,7 +885,8 @@ def setup(netrc_file=None):
     try:
         netrc_config = netrc.netrc(netrc_file)
         if WANDB_HOST in netrc_config.hosts:
-            os.environ[WANDB_API_KEY] = netrc_config.authenticators(WANDB_HOST)[2]
+            os.environ[WANDB_API_KEY] = netrc_config.authenticators(
+                WANDB_HOST)[2]
 
     except FileNotFoundError:
         pass
