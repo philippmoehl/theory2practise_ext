@@ -135,6 +135,75 @@ def nested_update(obj, update):
         nested_set(obj, path, value)
 
 
+def _locate(path: str):
+    """
+        Locate an object by name or dotted path, importing as necessary.
+        This is similar to the pydoc function `locate`, except that it checks for
+        the module from the given path from back to front.
+        """
+    if path == "":
+        raise ImportError("Empty path")
+    from importlib import import_module
+    from types import ModuleType
+
+    parts = [part for part in path.split(".")]
+    for part in parts:
+        if not len(part):
+            raise ValueError(
+                f"Error loading '{path}': invalid dotstring."
+                + "\nRelative imports are not supported."
+            )
+    assert len(parts) > 0
+    part0 = parts[0]
+    try:
+        obj = import_module(part0)
+    except Exception as exc_import:
+        raise ImportError(
+            f"Error loading '{path}':\n{repr(exc_import)}"
+            + f"\nAre you sure that module '{part0}' is installed?"
+        ) from exc_import
+    for m in range(1, len(parts)):
+        part = parts[m]
+        try:
+            obj = getattr(obj, part)
+        except AttributeError as exc_attr:
+            parent_dotpath = ".".join(parts[:m])
+            if isinstance(obj, ModuleType):
+                mod = ".".join(parts[: m + 1])
+                try:
+                    obj = import_module(mod)
+                    continue
+                except ModuleNotFoundError as exc_import:
+                    raise ImportError(
+                        f"Error loading '{path}':\n{repr(exc_import)}"
+                        + f"\nAre you sure that '{part}' is importable from module '{parent_dotpath}'?"
+                    ) from exc_import
+                except Exception as exc_import:
+                    raise ImportError(
+                        f"Error loading '{path}':\n{repr(exc_import)}"
+                    ) from exc_import
+            raise ImportError(
+                f"Error loading '{path}':\n{repr(exc_attr)}"
+                + f"\nAre you sure that '{part}' is an attribute of '{parent_dotpath}'?"
+            ) from exc_attr
+    return obj
+
+
+def get_dtype(path: str) -> torch.dtype:
+    try:
+        obj = _locate(path)
+
+        if not isinstance(obj, torch.dtype):
+            raise ValueError(
+                f"Located non-torch-type of type '{type(obj).__name__}'"
+                + f" while loading '{path}'"
+            )
+        cl: torch.dtype = obj
+        return cl
+    except Exception as e:
+        raise e
+
+
 def import_string(string):
     """
     Import a module path and return the attribute/class designated

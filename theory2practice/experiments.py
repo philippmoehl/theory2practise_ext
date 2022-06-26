@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 
+from omegaconf import OmegaConf
 import ray
 from ray.tune.integration.wandb import WandbTrainableMixin
 import torch
@@ -15,15 +16,6 @@ import wandb
 from . import utils
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
-
-formatter = logging.Formatter(
-    "%(asctime)s %(levelname)s %(module)s.py:%(lineno)d  -- %(message)s")
-
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(formatter)
-
-logger.addHandler(stream_handler)
 
 
 class Preprocessor(ABC):
@@ -185,11 +177,14 @@ class Trainable1(WandbTrainableMixin, ray.tune.Trainable):
 
     def setup(self, config):
         # settings
+        for key, val in config.items():
+            print(key, val)
         self.seed = config.get("seed")
         if self.seed is not None:
             utils.determinism(self.seed)
 
         config = utils.deserialize_spec(config)
+        print(config)
         self._device = config.device if torch.cuda.is_available() else "cpu"
         self._dtype = config.dtype
 
@@ -312,7 +307,8 @@ class Trainable2(WandbTrainableMixin, ray.tune.Trainable):
         if self.seed is not None:
             utils.determinism(self.seed)
 
-        config = utils.deserialize_spec(config)
+        config = TrainablePdeConfig(**config)
+
         self._device = config.device if torch.cuda.is_available() else "cpu"
         self._dtype = config.dtype
 
@@ -447,6 +443,37 @@ class Experiment(ray.tune.Experiment):
     def __init__(self, *args, preprocessors=None, **kwargs):
         self.preprocessors = preprocessors or []
         super().__init__(*args, **kwargs)
+
+
+class RunnerHydra:
+    """
+        Tune trainer to run a Tune Trainable.
+        """
+
+    def __init__(
+            self,
+            tune_run_kwargs=None,
+            ray_init_kwargs=None,
+    ):
+        self.tune_run_kwargs = tune_run_kwargs or {}
+        self.ray_init_kwargs = ray_init_kwargs or {}
+
+    def run(self, experiments):
+
+        for exp in experiments:
+            for preprocessor in exp.preprocessors:
+                preprocessor.run()
+
+        ray.init(**self.ray_init_kwargs)
+
+
+        analysis = ray.tune.run(
+            experiments,
+            **self.tune_run_kwargs,
+        )
+
+        ray.shutdown()
+        return analysis
 
 
 class Runner:

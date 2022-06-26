@@ -1,0 +1,9 @@
+-   _target_: theory2practice.experiments.SetupEnviron
+    environ_update:
+        TUNE_GLOBAL_CHECKPOINT_S: '600'
+        TUNE_MAX_PENDING_TRIALS_PG: '1'
+        TUNE_RESULT_BUFFER_LENGTH: '0'
+        TUNE_WARN_THRESHOLD_S: '2'
+-   _target_: theory2practice.experiments.LogSpecs
+    log_path: results/test
+    spec_dir: specs/test

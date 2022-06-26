@@ -1,0 +1,72 @@
+# _target_: theory2practice.experiments.TrainablePdeConfig
+algorithm:
+    _target_: theory2practice.algorithms.PinnAlgorithm
+    data_loader_kwargs:
+        batch_size: "${max: ${experiment.config.n_samples}}"
+        shuffle: false
+    grid:
+        _target_: theory2practice.pde_utils.TensorGrid
+        nx: 256
+        nt: 100
+    epochs_per_iteration: 1
+    loss:
+        _target_: theory2practice.utils.PinnLoss
+        loss_factor: 1
+        loss_style: mean
+    n_f: 100
+    model:
+      _target_: theory2practice.algorithms.FeedForward
+      activation:
+          _target_: torch.nn.Tanh
+      depth: 5
+      input_dim: 2
+      width: 50
+    optimizer_factory: "${get_cls: torch.optim.LBFGS}"
+    optimizer_kwargs:
+        lr: 1
+        max_iter: 1000000
+        max_eval: null
+        history_size: 50
+        tolerance_grad: 1.0e-7
+        tolerance_change: 1.0e-7
+        line_search_fn: strong_wolfe
+    # grid_scheduler_factory:
+    #     __import__: theory2practice.pde_utils.GridScheduler
+    # grid_scheduler_kwargs:
+    #     splits: 10
+    #     verbose: true
+    # grid_scheduler_step_frequency: 1
+    # curr_scheduler_factory:
+    #     __import__: theory2practice.pde_utils.CurriculumScheduler
+    # curr_scheduler_kwargs:
+    #     params:
+    #     - beta
+    #     warmup_factor: 0.05
+    #     warmup_iters: 3
+    #     total_iters: 20
+    #     verbose: true
+dim: 1
+dtype: "${get_dtype: torch.float}"
+log_path: results/test
+n_samples: 0
+plot_save_dir: plots
+plot_grid: true
+seed: 0
+pde:
+    _target_: theory2practice.pde_utils.ConvectionDiffusion
+    params:
+        beta: 1
+    u0: "${get_method: torch.sin}"
+    system: convection
+    source: 0
+test_losses:
+-   _target_: theory2practice.utils.LpLoss
+    p: 1
+-   _target_: theory2practice.utils.LpLoss
+    p: 2
+    relative: True
+-   _target_: theory2practice.utils.LpLoss
+    p: infinity
+wandb:
+    group: test
+    project: t2p_pde_test

@@ -2,6 +2,8 @@ from argparse import ArgumentParser
 
 from theory2practice.utils import load_spec, setup
 
+import os
+
 
 def main(argv=None):
     """Parse arguments and run the given experiments."""

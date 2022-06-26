@@ -1,0 +1,15 @@
+_target_: theory2practice.experiments.Experiment
+checkpoint_freq: 1
+local_dir: results/test
+max_failures: 10
+name: exp_hydra
+resources_per_trial:
+    cpu: 1
+    gpu: 0
+run:
+    "${get_cls: theory2practice.experiments.Trainable2}"
+stop:
+    _target_: builtins.dict
+    training_iteration: 1
+config: null
+preprocessors: null

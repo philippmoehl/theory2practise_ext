@@ -100,6 +100,6 @@ resources_per_trial:
     cpu: 1
     gpu: 0
 run:
-    __import__: theory2practice.experiments.Trainable
+    __import__: theory2practice.experiments.Trainable1
 stop:
     training_iteration: 5
