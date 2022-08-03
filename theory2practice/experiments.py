@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 
+import hydra
 from omegaconf import OmegaConf
 import ray
 from ray.tune.integration.wandb import WandbTrainableMixin
@@ -98,11 +99,10 @@ class ModelSaver(Preprocessor):
         elif not utils.load_spec(spec_file) == self.model_spec:
             logger.warning(
                 f"Different spec at {spec_file} but overwrite is false.")
-
         for s in self.seeds:
             file = self.path / f"{s}.pt"
             utils.determinism(s)
-            model = utils.deserialize_spec(self.model_spec)
+            model = hydra.utils.instantiate(self.model_spec)
             if not file.is_file() or self.overwrite:
                 torch.save(model.state_dict(), file)
             elif not ModelSaver.state_dict_close(
@@ -118,6 +118,9 @@ def restore_model(model, params_file, freeze=True):
     Load model parameters from a file.
     """
     params = torch.load(utils.absolute_path(params_file))
+    model = utils.absolute_path(model)
+    model = OmegaConf.load(model)
+    model = hydra.utils.instantiate(model)
     model.load_state_dict(params)
     model.eval()
     if freeze:
@@ -157,7 +160,6 @@ TrainablePdeConfig = namedtuple(
         "n_samples",
         "algorithm",
         "test_losses",
-        "dim",
         "log_path",
         "wandb",
         "plot_grid",
@@ -177,14 +179,11 @@ class Trainable1(WandbTrainableMixin, ray.tune.Trainable):
 
     def setup(self, config):
         # settings
-        for key, val in config.items():
-            print(key, val)
         self.seed = config.get("seed")
         if self.seed is not None:
             utils.determinism(self.seed)
 
-        config = utils.deserialize_spec(config)
-        print(config)
+        config = hydra.utils.instantiate(config)
         self._device = config.device if torch.cuda.is_available() else "cpu"
         self._dtype = config.dtype
 
@@ -307,7 +306,7 @@ class Trainable2(WandbTrainableMixin, ray.tune.Trainable):
         if self.seed is not None:
             utils.determinism(self.seed)
 
-        config = TrainablePdeConfig(**config)
+        config = hydra.utils.instantiate(config)
 
         self._device = config.device if torch.cuda.is_available() else "cpu"
         self._dtype = config.dtype
@@ -343,6 +342,10 @@ class Trainable2(WandbTrainableMixin, ray.tune.Trainable):
         self.save_attrs = ["metrics"] + [
             f"algorithm/{attr}" for attr in self.algorithm.save_attrs
         ]
+
+        # type(config) == omegaconf.OmegaConf.DictConfig
+        # WandbTrainableMixin needs dict
+        config = dict(config)
 
     def test(self):
 
@@ -445,7 +448,7 @@ class Experiment(ray.tune.Experiment):
         super().__init__(*args, **kwargs)
 
 
-class RunnerHydra:
+class Runner:
     """
         Tune trainer to run a Tune Trainable.
         """
@@ -453,56 +456,17 @@ class RunnerHydra:
     def __init__(
             self,
             tune_run_kwargs=None,
-            ray_init_kwargs=None,
     ):
         self.tune_run_kwargs = tune_run_kwargs or {}
-        self.ray_init_kwargs = ray_init_kwargs or {}
 
-    def run(self, experiments):
+    def run(self, experiment):
 
-        for exp in experiments:
-            for preprocessor in exp.preprocessors:
-                preprocessor.run()
-
-        ray.init(**self.ray_init_kwargs)
-
+        for preprocessor in experiment.preprocessors:
+            preprocessor.run()
 
         analysis = ray.tune.run(
-            experiments,
+            experiment,
             **self.tune_run_kwargs,
         )
 
-        ray.shutdown()
-        return analysis
-
-
-class Runner:
-    """
-    Tune trainer to run a Tune Trainable.
-    """
-
-    def __init__(
-        self,
-        tune_run_kwargs=None,
-        ray_init_kwargs=None,
-    ):
-        self.tune_run_kwargs = tune_run_kwargs or {}
-        self.ray_init_kwargs = ray_init_kwargs or {}
-
-    def run(self, exp_files):
-
-        experiments = [utils.load_spec(f, deserialize=True) for f in exp_files]
-
-        for exp in experiments:
-            for preprocessor in exp.preprocessors:
-                preprocessor.run()
-
-        ray.init(**self.ray_init_kwargs)
-
-        analysis = ray.tune.run(
-            experiments,
-            **self.tune_run_kwargs,
-        )
-
-        ray.shutdown()
         return analysis

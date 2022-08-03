@@ -1,5 +1,0 @@
-defaults:
-    - runner: runner
-    - experiment: exp_1
-    - experiment/preprocessors: preprocessors
-    - experiment/config: config

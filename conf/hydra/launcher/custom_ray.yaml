@@ -1,0 +1,37 @@
+defaults:
+  - ray
+
+ray:
+  init:
+    _node_ip_address:
+        _target_: os.environ.get
+        key: HEAD_NODE_IP
+        default: 127.0.0.1
+    _redis_password:
+        _target_: os.environ.get
+        key: REDIS_PASSWORD
+        default: '5241590000000000'
+    address:
+        _target_: os.environ.get
+        key: RAY_ADDRESS
+        default: null
+    runtime_env:
+        env_vars:
+            CUBLAS_WORKSPACE_CONFIG: :4096:8
+            PYTHONHASHSEED:
+                _target_: os.environ.get
+                key: PYTHONHASHSEED
+                default: '42'
+            WANDB_API_KEY:
+                _target_: os.environ.get
+                key: WANDB_API_KEY
+                default: __placeholder__
+            WANDB_MODE:
+                _target_: os.environ.get
+                key: WANDB_MODE
+                default: disabled
+            WANDB_SILENT:
+                _target_: os.environ.get
+                key: WANDB_SILENT
+                default: 'false'
+            WANDB_START_METHOD: thread

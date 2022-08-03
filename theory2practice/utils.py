@@ -7,6 +7,7 @@ import netrc
 import os
 from pathlib import Path
 import random
+import re
 import time
 import yaml
 
@@ -192,7 +193,6 @@ def _locate(path: str):
 def get_dtype(path: str) -> torch.dtype:
     try:
         obj = _locate(path)
-
         if not isinstance(obj, torch.dtype):
             raise ValueError(
                 f"Located non-torch-type of type '{type(obj).__name__}'"
@@ -200,6 +200,42 @@ def get_dtype(path: str) -> torch.dtype:
             )
         cl: torch.dtype = obj
         return cl
+    except Exception as e:
+        raise e
+
+
+def unfold_module(mod, attrs):
+    if hasattr(eval(mod), attrs[0]):
+        if len(attrs) > 1:
+            return unfold_module(f"{mod}.{attrs[0]}", attrs[1:])
+        else:
+            return
+    else:
+        raise AttributeError(f"Module {mod} has no attribute {'.'.join(attrs)}")
+
+
+def get_lambda(expr: str):
+    """Reads in a string and returns a lambda function.
+
+        Supports torch functions and mathematical expressions.
+
+            Typical example:
+
+            u0: '-2.4 * torch.sin(2x) * torch.cos(2*x)**3'
+        """
+    expr = re.sub(r"(\d+)x", r"\1*x", expr)  # "<n>x" -> "<n>*x"
+
+    p = re.compile(r"([a-zA-Z0-9]+)(\.[a-zA-Z0-9]+)+")  # finds imports in expr
+    for match in re.finditer(p, expr):
+        if match.group(1) != "torch":
+            raise NameError(
+                "At the moment, the u0 function only supports torch methods.")
+        match_mod = match.group(0).split(".")[0]
+        match_attrs = match.group(0).split(".")[1:]
+        unfold_module(match_mod, match_attrs)
+    try:
+        f = eval("lambda x:" + expr)
+        return f
     except Exception as e:
         raise e
 
@@ -947,7 +983,7 @@ def sinusoidal_target(factor=5):
     return target_fn
 
 
-def setup(netrc_file=None):
+def setup_wandb(netrc_file=None):
     """
     Setup Weights & Biases.
     """
@@ -962,3 +998,16 @@ def setup(netrc_file=None):
 
     if os.environ.get(WANDB_API_KEY, NO_WANDB_API_KEY) != NO_WANDB_API_KEY:
         os.environ["WANDB_MODE"] = "run"
+
+
+def max_1(val):
+    return max(val, 1)
+
+
+def ceil_nth(val, n):
+    return int(np.ceil(val/n))
+
+
+def method_wrapper(func):
+    method = _locate(func)
+    return method

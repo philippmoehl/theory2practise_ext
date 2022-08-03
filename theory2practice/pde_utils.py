@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 
+from omegaconf.listconfig import ListConfig
+
 import torch
 
 
@@ -53,7 +55,7 @@ class TensorGrid:
         # initial condition, from x = [-end, +end] and t=0
         ic = torch.cat([self.x_mesh[:1, :-1].t(), self.t_mesh[:1, :-1].t()],
                        dim=1)
-        # boundary condition at x = 0, and t = [0, 1]
+        # boundary condition at x = start, and t = [0, 1]
         bc_lb = torch.cat([self.x_mesh[:, :1], self.t_mesh[:, :1]], dim=1)
         # at x = end
         bc_ub = torch.cat([self.x_mesh[:, -1:], self.t_mesh[:, -1:]], dim=1)
@@ -321,7 +323,7 @@ class ReactionDiffusion(PDE):
 
         t_mesh = t_mesh_stacekd.view(-1, x_space.size(dim=0))
         u_full = torch.zeros_like(t_mesh.t())
-        dt = 1 / t_mesh.size(dim=0)
+        dt = torch.tensor(1 / t_mesh.size(dim=0))
 
         ikx = j_tensor_grid(x_space.size(dim=0))
 
@@ -329,9 +331,9 @@ class ReactionDiffusion(PDE):
         u_ = self._u0(x_space)
 
         for i in range(t_mesh.size(dim=0) - 1):
-            u_ = reaction(u_, 1, dt)
+            u_ = reaction(u_, self.rho, dt)
 
-            u_ = diffusion(u_, 1, dt, ikx ** 2)
+            u_ = diffusion(u_, self.nu, dt, ikx ** 2)
             u_full[:, i + 1] = u_
 
         u_full.to(device=self._device, dtype=self._dtype)
@@ -354,7 +356,7 @@ class ReactionDiffusion(PDE):
 def reaction(u, rho, dt):
     """ du/dt = rho*u*(1-u)
     """
-    factor_1 = u * torch.exp(torch.tensor(rho * dt))
+    factor_1 = u * torch.exp(rho * dt)
     factor_2 = (1 - u)
     u = factor_1 / (factor_2 + factor_1)
     return u
@@ -397,7 +399,7 @@ class CurriculumScheduler(Scheduler):
         self.pde = pde
 
         # TODO: param specific warmup and factors
-        if not isinstance(params, list) and not isinstance(params, tuple):
+        if not isinstance(params, (list, tuple, ListConfig)):
             self.params = [params]
         else:
             # TODO: restructure PDE base class to have property "params"

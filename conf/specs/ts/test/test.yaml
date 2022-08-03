@@ -1,0 +1,44 @@
+defaults:
+    - base_ts_test
+
+config:
+    algorithm:
+        _target_: theory2practice.algorithms.GdAlgorithm
+        data_loader_kwargs:
+            batch_size:
+                _target_: theory2practice.utils.ceil_nth
+                val: "\\${str_: n_samples}"  # atm OmegaConf does not allow for non-recursive resolvers
+                n: 5
+            shuffle: true
+        distribution_wrapper:
+            _target_: theory2practice.utils.DistributionWrapper
+            distribution_factory: "${get_method: torch.distributions.uniform.Uniform}"
+            tensor_kwargs:
+                high: 0.5
+                low:
+                    _target_: theory2practice.utils.create_tensor
+                    data:
+                    - -0.5
+        epochs_per_iteration: 1000
+        loss:
+            _target_: theory2practice.utils.LpLoss
+            p: 2
+        model:
+            _target_: theory2practice.algorithms.FeedForward
+            activation:
+                _target_: torch.nn.ReLU
+            depth: 5
+            input_dim: 1
+            width: 32
+        optimizer_factory: "${get_cls: torch.optim.Adam}"
+        optimizer_kwargs:
+            lr: 0.0001
+        scheduler_factory: "${get_cls: torch.optim.lr_scheduler.ExponentialLR}"
+        scheduler_kwargs:
+            gamma:
+                eval: "(1e-06 / ${specs.config.algorithm.optimizer_kwargs.lr}) ** (1 / 5000)"
+        scheduler_step_unit: epoch
+        standardize: true
+    wandb:
+        group: exp_test
+name: exp_test

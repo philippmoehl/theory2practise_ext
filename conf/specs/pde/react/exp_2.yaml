@@ -1,0 +1,75 @@
+defaults:
+    - base_conv
+
+config:
+  algorithm:
+      _target_: theory2practice.algorithms.PinnAlgorithm
+      data_loader_kwargs:
+          batch_size:
+            _target_: theory2practice.utils.max_1
+            val: "\\${str_: n_samples}"  # atm OmegaConf does not allow for non-recursive resolvers
+          shuffle: false
+      grid:
+          _target_: theory2practice.pde_utils.TensorGrid
+          nx: 256
+          nt: 100
+      epochs_per_iteration: "${specs.config.algorithm.curr_scheduler_kwargs.total_iters}"
+      loss:
+          _target_: theory2practice.utils.PinnLoss
+          loss_factor: 1
+          loss_style: mean
+      n_f:
+        grid_search:
+        - 100
+      model:
+        _target_: theory2practice.algorithms.FeedForward
+        activation:
+            _target_: torch.nn.Tanh
+        depth: 5
+        input_dim: 2
+        width: 50
+      optimizer_factory: "${get_cls: torch.optim.LBFGS}"
+      optimizer_kwargs:
+          lr: 1
+          max_iter: 1000000
+          max_eval: null
+          history_size: 50
+          tolerance_grad: 1.0e-7
+          tolerance_change: 1.0e-7
+          line_search_fn: strong_wolfe
+      curr_scheduler_factory: "${get_cls: theory2practice.pde_utils.CurriculumScheduler}"
+      curr_scheduler_kwargs:
+          params:
+          - beta
+          warmup_factor: 0.05
+          warmup_iters: 3
+          total_iters: 20
+          verbose: true
+  n_samples: 0
+  pde:
+    u0: "${get_lambda: 'torch.sin(x)'}"
+    params:
+      rho:
+        grid_search:
+        - 0.1
+        - 0.2
+        - 0.3
+        - 0.4
+        - 0.5
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+        - 10
+        - 20
+        - 30
+        - 40
+        - 50
+  wandb:
+      group: exp_2
+name: exp_2

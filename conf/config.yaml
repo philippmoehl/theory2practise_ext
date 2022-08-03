@@ -1,0 +1,8 @@
+defaults:
+  - base_config
+  - specs: pde/conv/exp_0
+  - runner: runner
+  - override hydra/launcher: custom_ray
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_

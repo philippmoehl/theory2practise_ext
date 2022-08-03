@@ -1,0 +1,9 @@
+defaults:
+    - base_runner
+
+tune_run_kwargs:
+    resume: ERRORED_ONLY
+    sync_config:
+        _target_: ray.tune.SyncConfig
+        sync_to_driver: false
+    verbose: 1

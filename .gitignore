@@ -155,3 +155,7 @@ cython_debug/
 
 # hydra
 outputs
+multirun
+
+# personal lists
+todos.md

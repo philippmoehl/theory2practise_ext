@@ -1,35 +1,18 @@
-from argparse import ArgumentParser
+import hydra
 
-from theory2practice.utils import load_spec, setup
+from conf.configs.utils import setup_hydra
+from theory2practice.utils import setup_wandb
 
-import os
 
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg):
+    """Instantiate configurations and run experiments."""
 
-def main(argv=None):
-    """Parse arguments and run the given experiments."""
-
-    parser = ArgumentParser(description="Tune executor")
-    parser.add_argument(
-        "-e",
-        "--exp-files",
-        nargs="+",
-        type=str,
-        default=["specs/test/exp_0.yaml", "specs/test/exp_1.yaml"],
-        help="Experiment spec files.",
-    )
-    parser.add_argument(
-        "-r",
-        "--runner-file",
-        type=str,
-        default="specs/runner.yaml",
-        help="Experiment runner spec file.",
-    )
-
-    args = parser.parse_args(argv)
-    setup()
-    runner = load_spec(args.runner_file, deserialize=True)
-    runner.run(args.exp_files)
+    cfg = hydra.utils.instantiate(cfg, _convert_="all")
+    cfg["runner"].run(cfg["specs"])
 
 
 if __name__ == "__main__":
+    setup_wandb()
+    setup_hydra()
     main()
