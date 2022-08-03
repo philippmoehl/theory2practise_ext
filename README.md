@@ -7,7 +7,7 @@ Practice](https://github.com/juliusberner/theory2practice).
 
 
 
-### Extensions (state 19.06.2022):
+### Extensions (state 03.08.2022):
 * physical informed neural networks (PINNs)
 * PINNs + data method
 * periodic PDEs - mentioned in [Characterizing possible failure modes in physics-informed neural networks](
@@ -19,6 +19,7 @@ https://arxiv.org/abs/2109.01050)
 * curriculum learning for PDEs
    * parameter w/ or w/o warmup, linear increasing towards harder PDEs
 * sequential grid learning for PDEs
+* updated config management to [Hydra](https://hydra.cc/)
   
 ## Install
 
