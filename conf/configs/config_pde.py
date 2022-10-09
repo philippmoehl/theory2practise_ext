@@ -210,6 +210,38 @@ class ReactDiffConfig(PdeExperimentConfig):
     )
 
 
+@dataclass
+class BurgerConfig(PdeExperimentConfig):
+    local_dir: pathlib.Path = pathlib.Path("results/pde/burger")
+    preprocessors: List = dataclasses.field(
+        default_factory=lambda: [
+            {
+                "_target_": "theory2practice.experiments.SetupEnviron",
+                "environ_update": {
+                    "TUNE_GLOBAL_CHECKPOINT_S": "600",
+                    "TUNE_MAX_PENDING_TRIALS_PG": "1",
+                    "TUNE_RESULT_BUFFER_LENGTH": "0",
+                    "TUNE_WARN_THRESHOLD_S": "2",
+                },
+            },
+            {
+                "_target_": "theory2practice.experiments.LogSpecs",
+                "log_path": pathlib.Path("results/pde/burger"),
+                "spec_dir": pathlib.Path("conf/specs/pde/burger"),
+            }
+        ]
+    )
+    config: TrainablePdeConfig = TrainablePdeConfig(
+        log_path=pathlib.Path("results/pde/burger"),
+        pde={
+            "_target_": "theory2practice.pde_utils.Burger",
+            "params": {"nu": 0.01},
+            "u0": "${get_lambda: 'torch.sin(x)'}",
+        },
+        wandb={"group": "exp", "project": "t2p_pde_burger"}
+    )
+
+
 def store():
     from .config import cs
 
@@ -219,3 +251,4 @@ def store():
     cs.store(group="specs", name="base_react", node=ReactConfig)
     cs.store(group="specs", name="base_react_diff",
              node=ReactDiffConfig)
+    cs.store(group="specs", name="base_burger", node=BurgerConfig)

@@ -6,6 +6,20 @@ from omegaconf import OmegaConf
 import torch
 
 
+def get_constant(path: str) -> float:
+    try:
+        obj = _locate(path)
+        if not isinstance(obj, float):
+            raise ValueError(
+                f"Located non-float of type '{type(obj).__name__}'"
+                + f" while loading '{path}'"
+            )
+        cl: float = obj
+        return cl
+    except Exception as e:
+        raise e
+
+
 def get_dtype(path: str) -> torch.dtype:
     try:
         obj = _locate(path)
@@ -117,6 +131,9 @@ def register_resolvers():
     OmegaConf.register_new_resolver(
         name="get_cls",
         resolver=lambda cls: hydra.utils.get_class(cls))
+    OmegaConf.register_new_resolver(
+        name="get_constant",
+        resolver=lambda c: get_constant(c))
     OmegaConf.register_new_resolver(
         name="get_dtype",
         resolver=lambda dtype: get_dtype(dtype))

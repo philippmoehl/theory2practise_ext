@@ -1,0 +1,51 @@
+defaults:
+    - base_burger
+
+config:
+  algorithm:
+      _target_: theory2practice.algorithms.PinnAlgorithm
+      data_loader_kwargs:
+          batch_size:
+            _target_: theory2practice.utils.max_1
+            val: "\\${str_: n_samples}"  # atm OmegaConf does not allow for non-recursive resolvers
+          shuffle: false
+      grid:
+          _target_: theory2practice.pde_utils.TensorGrid
+          nx: 256
+          nt: 100
+          x_lb: -1
+          x_ub: 1
+      epochs_per_iteration: 1
+      loss:
+          _target_: theory2practice.utils.PinnLoss
+          loss_factor: 1
+          loss_style: mean
+      n_f:
+        grid_search:
+        - 10000
+      model:
+        _target_: theory2practice.algorithms.FeedForward
+        activation:
+            _target_: torch.nn.Tanh
+        depth: 9
+        input_dim: 2
+        width: 20
+      optimizer_factory: "${get_cls: torch.optim.LBFGS}"
+      optimizer_kwargs:
+          lr: 1
+          max_iter: 1000000
+          max_eval: null
+          history_size: 50
+          tolerance_grad: 1.0e-7
+          tolerance_change: 1.0e-7
+          line_search_fn: strong_wolfe
+  n_samples: 0
+  plot_grid: true
+  pde:
+    u0: "${get_lambda: '-torch.sin(torch.pi * x)'}"
+    params:
+      nu:
+        eval: "0.01 / ${get_constant: 'torch.pi'}"
+  wandb:
+      group: exp_0
+name: exp_0

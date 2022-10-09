@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
+from functools import partial
 
 from omegaconf.listconfig import ListConfig
 
 import torch
+from torchdiffeq import odeint
 
 
 def create_tensor_spaces(nx, nt, x_lb, x_ub, t_min, t_max):
@@ -117,6 +119,11 @@ class PDE(ABC):
     def initialize(self):
         pass
 
+    @property
+    @abstractmethod
+    def params(self):
+        pass
+
     @abstractmethod
     def u0(self, x_space):
         pass
@@ -147,7 +154,7 @@ class ConvectionDiffusion(PDE):
     def __init__(self, system, u0, params, source):
         self.system = system
         self._u0 = u0
-        self.params = params
+        self._params = params
         self.source = source
 
         self._device = None
@@ -160,15 +167,18 @@ class ConvectionDiffusion(PDE):
     def initialize(self):
         # params
         if self.system == "convection":
-            if "beta" in self.params:
-                self.beta = self.params["beta"]
+            if "beta" in self._params:
+                self.beta = self._params["beta"]
         elif self.system == "diffusion":
-            if "nu" in self.params:
-                self.nu = self.params["nu"]
+            if "nu" in self._params:
+                self.nu = self._params["nu"]
         else:
             raise ValueError(
                 "System needs to be chosen either 'convection' or 'diffusion'."
             )
+
+    def params(self):
+        return self._params
 
     def u0(self, x_space):
         return self._u0(x_space).view(-1, 1)
@@ -191,17 +201,17 @@ class ConvectionDiffusion(PDE):
         x_space = x_mesh_stacked.unique().sort()[0]
 
         t_mesh = t_mesh_stacked.view(-1, x_space.size(dim=0))
-        uhat0 = torch.fft.fft(self._u0(x_space))
+        u_hat_0 = torch.fft.fft(self._u0(x_space))
         g = torch.zeros_like(x_space) + self.source
         ikx = j_tensor_grid(x_space.size(dim=0))
 
         nu_factor = torch.exp(self.nu * ikx ** 2 * t_mesh
                               - self.beta * ikx * t_mesh)
-        a = uhat0 - torch.fft.fft(g) * 0  # at t=0, second term goes away
+        a = u_hat_0 - torch.fft.fft(g) * 0  # at t=0, second term goes away
         # for constant, fft(p) dt = fft(p)*T
-        uhat = a * nu_factor + torch.fft.fft(g) * t_mesh
+        u_hat = a * nu_factor + torch.fft.fft(g) * t_mesh
 
-        u_full = torch.real(torch.fft.ifft(uhat))
+        u_full = torch.real(torch.fft.ifft(u_hat))
         u_full.to(device=self._device, dtype=self._dtype)
 
         return u_full.flatten().view(-1, 1)
@@ -221,6 +231,71 @@ class ConvectionDiffusion(PDE):
         self._dtype = dtype
 
 
+class Burger(PDE):
+    """
+    nu: viscosity coefficient
+    """
+
+    def __init__(self, u0, params):
+        self._u0 = u0
+        self._params = params
+
+        self._device = None
+        self._dtype = None
+        self.nu = 0.0
+
+        self.initialize()
+
+    def initialize(self):
+        # params
+        if "nu" in self._params:
+            self.nu = self._params["nu"]
+
+    def params(self):
+        return self._params
+
+    def u0(self, x_space):
+        return self._u0(x_space).view(-1, 1)
+
+    def u(self, x, t, full_grid):
+        u_full = self.solver(full_grid)
+
+        x_t_ = torch.cat([x, t], dim=1)
+        idx, idx_perm = torch.where((full_grid[:, None] == x_t_).all(dim=-1))
+        # invert index permutation
+        idx_inv = idx[torch.argsort(idx_perm)]
+        return u_full[idx_inv]
+
+    def solver(self, full_grid):
+        x_mesh_stacked, t_mesh_stacked = torch.unbind(full_grid, dim=1)
+        x_space = x_mesh_stacked.unique().sort()[0]
+        t_space = t_mesh_stacked.unique().sort()[0]
+
+        dx = x_space[1] - x_space[0]
+        n = 2 * torch.pi * torch.fft.fftfreq(x_space.size(dim=0), d=dx)
+        u0 = self._u0(x_space)
+
+        burger_partial = partial(burger, n=n, nu=self.nu)
+
+        u_full = odeint(burger_partial, u0, t_space)
+        u_full.to(device=self._device, dtype=self._dtype)
+
+        return u_full.flatten().view(-1, 1)
+
+    def enforcer(self, u, x, t):
+        """u_t - \nu * u_xx + \beta * u_x - G"""
+        u_t = grad(u, t)
+        u_x = grad(u, x)
+        u_xx = grad(u_x, x)
+
+        return u_t + u * u_x - self.nu * u_xx
+
+    def to(self, dtype=None, device=None):
+        """Sets the device and dtype."""
+        self._device = device
+        self._dtype = dtype
+
+
 class Reaction(PDE):
     """
     rho
@@ -228,7 +303,7 @@ class Reaction(PDE):
 
     def __init__(self, u0, params):
         self._u0 = u0
-        self.params = params
+        self._params = params
 
         self._device = None
         self._dtype = None
@@ -238,8 +313,11 @@ class Reaction(PDE):
 
     def initialize(self):
         # params
-        if "rho" in self.params:
-            self.rho = self.params["rho"]
+        if "rho" in self._params:
+            self.rho = self._params["rho"]
+
+    def params(self):
+        return self._params
 
     def u0(self, x_space):
         return self._u0(x_space).view(-1, 1)
@@ -283,7 +361,7 @@ class ReactionDiffusion(PDE):
 
     def __init__(self, u0, params):
         self._u0 = u0
-        self.params = params
+        self._params = params
 
         self._device = None
         self._dtype = None
@@ -294,10 +372,13 @@ class ReactionDiffusion(PDE):
 
     def initialize(self):
         # params
-        if "nu" in self.params:
-            self.nu = self.params["nu"]
-        if "rho" in self.params:
-            self.rho = self.params["rho"]
+        if "nu" in self._params:
+            self.nu = self._params["nu"]
+        if "rho" in self._params:
+            self.rho = self._params["rho"]
+
+    def params(self):
+        return self._params
 
     def u0(self, x_space):
         return self._u0(x_space).view(-1, 1)
@@ -378,7 +459,18 @@ def j_tensor_grid(nx):
     return torch.cat((ikx_pos, ikx_neg))
 
 
-# TODO: give base class more structure
+def burger(t, u0, n, nu):
+    u_hat_0 = torch.fft.fft(u0)
+    u_hat_x = 1j * n * u_hat_0
+    u_hat_xx = -n ** 2 * u_hat_0
+
+    u_x = torch.fft.ifft(u_hat_x)
+    u_xx = torch.fft.ifft(u_hat_xx)
+
+    u_t = -u0 * u_x + nu * u_xx
+    return torch.real(u_t)
+
+
 class Scheduler(ABC):
     """
     Base class for different schedulers.
@@ -386,6 +478,10 @@ class Scheduler(ABC):
 
     @abstractmethod
     def step(self):
+        pass
+
+    @abstractmethod
+    def print_step(self, is_verbose):
         pass
 
 
@@ -402,7 +498,6 @@ class CurriculumScheduler(Scheduler):
         if not isinstance(params, (list, tuple, ListConfig)):
             self.params = [params]
         else:
-            # TODO: restructure PDE base class to have property "params"
             if not 0 < len(params) <= len(self.pde.params):
                 raise ValueError(f"Expected at least 1 and at most "
                                  f"{len(self.pde.params)} parameters, "
@@ -462,12 +557,8 @@ class CurriculumScheduler(Scheduler):
         self.warmup_iters = warmup_iters
 
         self.verbose = verbose
-        self._last_params = self.base_params
 
         self.step()
-
-    def get_last_params(self):
-        return self._last_params
 
     def get_params(self):
 
@@ -492,12 +583,12 @@ class CurriculumScheduler(Scheduler):
             base_param * (self.warmup_factor + rem_steps * rel_factor)
             for base_param in self.base_params]
 
-    @staticmethod
-    def print_params(is_verbose, param, value):
+    def print_step(self, is_verbose):
         if is_verbose:
-            # TODO: logging info level instead, if verbose
-            print(f"Adjusting parameter"
-                  f" {param} to {value:.2f}.")
+            values = self.get_params()
+            for param, value in zip(self.params, values):
+                print(f"Adjusting parameter"
+                      f" {param} to {value:.2f}.")
 
     def step(self):
         self.last_step += 1
@@ -505,9 +596,7 @@ class CurriculumScheduler(Scheduler):
 
         for param, value in zip(self.params, values):
             setattr(self.pde, param, value)
-            self.print_params(self.verbose, param, value)
-
-        self._last_params = [getattr(self.pde, param) for param in self.params]
+        self.print_step(self.verbose)
 
 
 class GridScheduler(Scheduler):
@@ -562,14 +651,11 @@ class GridScheduler(Scheduler):
         self._n = int(getattr(self.grid, n_axis) / splits)
         setattr(grid, n_axis, self._n)
         self.splits = splits
-
         self.verbose = verbose
-
         self.step()
 
     def print_step(self, is_verbose):
         if is_verbose:
-            # TODO: logging info level instead, if verbose
             print(f"Adjusting to grid split"
                   f" {self.last_step + 1} of {self.splits} splits.")
 
