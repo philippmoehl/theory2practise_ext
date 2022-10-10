@@ -22,7 +22,7 @@ config:
           loss_style: mean
       n_f:
         grid_search:
-        - 10000
+        - 2000
       model:
         _target_: theory2practice.algorithms.FeedForward
         activation:

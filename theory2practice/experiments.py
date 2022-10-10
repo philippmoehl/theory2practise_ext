@@ -297,7 +297,7 @@ class Trainable1(WandbTrainableMixin, ray.tune.Trainable):
 
 class Trainable2(WandbTrainableMixin, ray.tune.Trainable):
     """
-    Tune Trainable for executing PDE experiments.
+    Tune Trainable for PDE experiments.
     """
 
     def setup(self, config):
@@ -450,8 +450,8 @@ class Experiment(ray.tune.Experiment):
 
 class Runner:
     """
-        Tune trainer to run a Tune Trainable.
-        """
+    Tune trainer to run a Tune Trainable.
+    """
 
     def __init__(
             self,

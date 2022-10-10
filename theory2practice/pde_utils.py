@@ -19,7 +19,8 @@ class TensorGrid:
     Grid data preprocessor.
     """
 
-    def __init__(self, nx, nt, x_lb=0., x_ub=2 * torch.pi, t_min=0., t_max=1.):
+    def __init__(self, nx, nt, x_lb=0., x_ub=2 * torch.pi, t_min=0.,
+                 t_max=1.):
         self.nx = nx
         self.nt = nt
         self.x_lb = x_lb
@@ -94,7 +95,7 @@ class TensorGrid:
     def t_axis(self):
         return self.t_space
 
-    def to(self, dtype, device):
+    def to(self, device, dtype):
         """Sets the device and dtype."""
         self._device = device
         self._dtype = dtype
@@ -112,7 +113,7 @@ def grad(u, argument):
 
 class PDE(ABC):
     """
-    Base class for different pdes.
+    PDE base class.
     """
 
     @abstractmethod
@@ -141,14 +142,17 @@ class PDE(ABC):
         pass
 
     @abstractmethod
-    def to(self, dtype, device):
+    def to(self, device, dtype):
         pass
 
 
 class ConvectionDiffusion(PDE):
     """
-    nu: viscosity coefficient
-    beta: wavespeed coefficient
+    Convection or Diffusion PDEs.
+
+    Parameters:
+      - nu: viscosity coefficient
+      - beta: wavespeed coefficient
     """
 
     def __init__(self, system, u0, params, source):
@@ -193,10 +197,6 @@ class ConvectionDiffusion(PDE):
         return u_full[idx_inv]
 
     def solver(self, full_grid):
-        """Calculate the u solution for convection/diffusion, assuming PBCs.
-            Args:
-            Returns:
-            """
         x_mesh_stacked, t_mesh_stacked = torch.unbind(full_grid, dim=1)
         x_space = x_mesh_stacked.unique().sort()[0]
 
@@ -225,15 +225,17 @@ class ConvectionDiffusion(PDE):
 
         return u_t - self.nu * u_xx + self.beta * u_x - g
 
-    def to(self, dtype=None, device=None):
-        """Sets the device and dtype."""
+    def to(self, device=None, dtype=None):
         self._device = device
         self._dtype = dtype
 
 
 class Burger(PDE):
     """
-    nu: viscosity coefficient
+    Burger PDE.
+
+    Parameters:
+      - nu: viscosity coefficient
     """
 
     def __init__(self, u0, params):
@@ -276,7 +278,6 @@ class Burger(PDE):
         u0 = self._u0(x_space)
 
         burger_partial = partial(burger, n=n, nu=self.nu)
-
         u_full = odeint(burger_partial, u0, t_space)
         u_full.to(device=self._device, dtype=self._dtype)
 
@@ -290,15 +291,17 @@ class Burger(PDE):
 
         return u_t + u * u_x - self.nu * u_xx
 
-    def to(self, dtype=None, device=None):
-        """Sets the device and dtype."""
+    def to(self, device=None, dtype=None):
         self._device = device
         self._dtype = dtype
 
 
 class Reaction(PDE):
     """
-    rho
+    Reaction PDE.
+
+    Parameters:
+      - rho
     """
 
     def __init__(self, u0, params):
@@ -347,16 +350,18 @@ class Reaction(PDE):
 
         return u_t - self.rho * u + self.rho * u ** 2
 
-    def to(self, dtype=None, device=None):
-        """Sets the device and dtype."""
+    def to(self, device=None, dtype=None):
         self._device = device
         self._dtype = dtype
 
 
 class ReactionDiffusion(PDE):
     """
-    nu: diffusion coefficient
-    rho: reaction coefficient
+    Reaction PDE.
+
+    Parameters:
+      - nu: diffusion coefficient
+      - rho: reaction coefficient
     """
 
     def __init__(self, u0, params):
@@ -393,18 +398,12 @@ class ReactionDiffusion(PDE):
         return u_full[idx_inv]
 
     def solver(self, full_grid):
-        """ Computes the discrete solution of the reaction-diffusion PDE using
-                pseudo-spectral operator splitting.
-            Args:
-
-            Returns:
-            """
         x_mesh_stacked, t_mesh_stacekd = torch.unbind(full_grid, dim=1)
         x_space = x_mesh_stacked.unique().sort()[0]
 
         t_mesh = t_mesh_stacekd.view(-1, x_space.size(dim=0))
         u_full = torch.zeros_like(t_mesh.t())
-        dt = torch.tensor(1 / t_mesh.size(dim=0))
+        dt = (1 / t_mesh.size(dim=0))
 
         ikx = j_tensor_grid(x_space.size(dim=0))
 
@@ -428,14 +427,14 @@ class ReactionDiffusion(PDE):
 
         return u_t - self.nu * u_xx - self.rho * u + self.rho * u ** 2
 
-    def to(self, dtype=None, device=None):
-        """Sets the device and dtype."""
+    def to(self, device=None, dtype=None):
         self._device = device
         self._dtype = dtype
 
 
 def reaction(u, rho, dt):
-    """ du/dt = rho*u*(1-u)
+    """
+    du/dt = rho*u*(1-u)
     """
     factor_1 = u * torch.exp(rho * dt)
     factor_2 = (1 - u)
@@ -444,7 +443,8 @@ def reaction(u, rho, dt):
 
 
 def diffusion(u, nu, dt, ikx2):
-    """ du/dt = nu*d2u/dx2
+    """
+    du/dt = nu*d2u/dx2
     """
     factor = torch.exp(nu * ikx2 * dt)
     u_hat = torch.fft.fft(u)
@@ -473,7 +473,7 @@ def burger(t, u0, n, nu):
 
 class Scheduler(ABC):
     """
-    Base class for different schedulers.
+    Scheduler base class.
     """
 
     @abstractmethod

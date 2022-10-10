@@ -6,7 +6,9 @@ from theory2practice.utils import setup_wandb
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg):
-    """Instantiate configurations and run experiments."""
+    """
+    Instantiate configurations and run experiments.
+    """
 
     cfg = hydra.utils.instantiate(cfg, _convert_="all")
     cfg["runner"].run(cfg["specs"])
