@@ -7,6 +7,7 @@ Practice](https://github.com/juliusberner/theory2practice).
 
 
 
+
 ### Extensions (state 03.08.2022):
 * physical informed neural networks (PINNs)
 * PINNs + data method
@@ -55,33 +56,44 @@ The remaining requirements can be found in [`requirements_conda.txt`](requiremen
 See [here](https://pytorch.org/get-started/locally/) for more details on the PyTorch installation 
 based on compute platform and OS.
 
-## How-To
+## How-To Teacher Student
 
 We specify our experiments using `.yaml` files in the folder [`specs`](specs) 
 and we provide specifications for the following experiments:
 
 1. Learning a sinusoidal function:
    
-    `python main.py -e specs/1d_sine/exp_0.yaml`
+    `python main.py specs=ts/1d_sine/exp_0`
 
 2. One-dimensional teacher-student setting (each experiment uses a different batch-size):
 
-    `python main.py -e specs/1d_5x32/exp_0.yaml`
+    `python main.py specs=ts/1d_5x32/exp_0`
     
-    `python main.py -e specs/1d_5x32/exp_1.yaml`
+    `python main.py specs=ts/1d_5x32/exp_1`
     
-    `python main.py -e specs/1d_5x32/exp_2.yaml`
+    `python main.py specs=ts/1d_5x32/exp_2`
 
 3. Three-dimensional teacher-student setting (each experiment uses a different batch-size):
 
-    `python main.py -e specs/3d_5x32/exp_0.yaml`
+    `python main.py specs=ts/3d_5x32/exp_0`
     
-    `python main.py -e specs/3d_5x32/exp_1.yaml`
+    `python main.py specs=ts/3d_5x32/exp_1`
     
-    `python main.py -e specs/3d_5x32/exp_2.yaml`
+    `python main.py specs=ts/3d_5x32/exp_2`
 
 Note that each training uses a single GPU by default. This can be changed using the key `resources_per_trial` in the
 respective experiment specification. You can resume an experiment by adding the flag `-r specs/runner_resume.yaml`.
+
+## How-To PDEs
+
+We specify our experiments using `.yaml` files in the folder [`specs`](specs) 
+and we provide specifications for the following experiments:
+
+    `python main.py specs=pde/<PDE Name>/exp_0`
+
+Note that each training uses a single GPU by default. This can be changed using the key `resources_per_trial` in the
+respective experiment specification. You can resume an experiment by adding the flag `-r specs/runner_resume.yaml`.
+
 
 ## Analysis
 
