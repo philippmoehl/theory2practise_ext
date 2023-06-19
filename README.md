@@ -12,11 +12,12 @@ Practice](https://github.com/juliusberner/theory2practice).
 * physical informed neural networks (PINNs)
 * PINNs + data method
 * periodic PDEs - mentioned in [Characterizing possible failure modes in physics-informed neural networks](
-https://arxiv.org/abs/2109.01050)
+https://arxiv.org/abs/2109.01050) and other papers
    * convection
    * diffusion
    * reaction
    * reaction-diffusion
+   * Burgers equation
 * curriculum learning for PDEs
    * parameter w/ or w/o warmup, linear increasing towards harder PDEs
 * sequential grid learning for PDEs
