@@ -1,14 +1,22 @@
-# Theory to Practise - Extension
+# Scaling Behavior of Physics Informed Neural Networks for Solving PDEs
 
-This is an extension to the original experiment script in [Accurate Learning with Neural Networks - from Theory to 
-Practice](https://github.com/juliusberner/theory2practice).
+This is the code for my M.Sc. thesis in Mathematics at the University of Vienna,
+[Scaling Behavior of Physics Informed Neural Networks for Solving Partial Differential Equations](https://philippmoehl.github.io/files/ma_thesis.pdf),
+supervised by Univ.-Prof. Dr. Philipp Grohs (2023). The thesis introduces
+physics-informed neural networks (PINNs) as a regularized learning problem and
+measures empirically how their approximation error scales with the number of
+training samples, on model PDEs of increasing complexity.
+
+The code extends the experiment framework of
+[Accurate Learning with Neural Networks - from Theory to Practice](https://github.com/juliusberner/theory2practice)
+by Julius Berner, which is where the repository name comes from.
 
 ![Illustration of a learned neural network with small average but large uniform error.](illustration1.png)
 
 
 
-### Extensions (state 19.06.2022):
-* physical informed neural networks (PINNs)
+### What this repository adds to the original framework
+* physics-informed neural networks (PINNs), see `PinnAlgorithm` in [`theory2practice/algorithms.py`](theory2practice/algorithms.py)
 * PINNs + data method
 * periodic PDEs - mentioned in [Characterizing possible failure modes in physics-informed neural networks](
 https://arxiv.org/abs/2109.01050)
@@ -78,6 +86,16 @@ and we provide specifications for the following experiments:
     `python main.py -e specs/3d_5x32/exp_1.yaml`
     
     `python main.py -e specs/3d_5x32/exp_2.yaml`
+
+4. PINNs on periodic PDEs:
+
+    `python main.py -e specs/pde_convection/exp_0.yaml`
+
+    `python main.py -e specs/pde_diffusion/exp_0.yaml`
+
+    `python main.py -e specs/pde_reaction/exp_0.yaml`
+
+    `python main.py -e specs/pde_reaction_diffusion/exp_0.yaml`
 
 Note that each training uses a single GPU by default. This can be changed using the key `resources_per_trial` in the
 respective experiment specification. You can resume an experiment by adding the flag `-r specs/runner_resume.yaml`.
